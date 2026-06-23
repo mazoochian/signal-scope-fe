@@ -17,9 +17,9 @@ const kindStyles: Record<StatusKind, string> = {
 export function StatusPill({ kind, children }: StatusPillProps) {
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${kindStyles[kind]}`}
+      className={`inline-flex items-center gap-1 rounded-full border px-1.25 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${kindStyles[kind]}`}
     >
-      <span className="status-dot" />
+      <span className="status-dot mr-1" />
       {children}
     </span>
   );

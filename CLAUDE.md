@@ -21,6 +21,27 @@ When asked to review a branch the human has pushed:
 ## Commit style
 
 - Commit messages: short imperative summary line, then a blank line and a body if the why isn't obvious.
+- Body format: The body of the commit message should follow the following format:
+  ```
+  Features Added:
+   + Item
+   + ...
+  Functionalities Revised:
+   o Item
+   o ...
+  Bugs Fixed:
+   - Item
+   - ...
+  ```
+  If there are no changes in one of the blocks simply put 'nothing' like so:
+  ```
+  Features Added:
+   + Nothing
+  Functionalities Revised:
+   o Nothing
+  Bugs Fixed:
+   - Fixed issue#34 (link to the issue)
+  ```
 - Always append the co-author trailer:
   ```
   Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>
