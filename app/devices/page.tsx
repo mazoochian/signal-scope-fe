@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Search, Filter, MoreHorizontal, Server, Router, Wifi, Shield } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { TopBar } from "@/components/layout/top-bar";
@@ -91,12 +92,12 @@ export default async function DevicesPage() {
                 {devices.map((r) => {
                   const Icon = ICON_MAP[r.icon] ?? Server;
                   return (
-                    <tr key={r.id} className="hover:bg-elevated/40">
+                    <tr key={r.id} className="hover:bg-elevated/40 cursor-pointer">
                       <td className="px-2 py-2">
-                        <div className="flex items-center gap-2">
+                        <Link href={`/devices/${r.id}`} className="flex items-center gap-2 hover:underline underline-offset-2">
                           <Icon className="h-3.5 w-3.5 text-primary" />
                           <span className="font-mono text-foreground">{r.name}</span>
-                        </div>
+                        </Link>
                       </td>
                       <td className="px-2 py-2 font-mono text-muted-foreground">{r.ip}</td>
                       <td className="px-2 py-2">
