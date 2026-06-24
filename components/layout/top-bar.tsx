@@ -11,7 +11,7 @@ interface TopBarProps {
 
 function LiveStatus() {
   return (
-    <div className="hidden items-center gap-3 rounded-md border border-border bg-panel px-3 py-1.5 text-[11px] md:flex">
+    <div className="hidden h-8 items-center gap-3 rounded-md border border-border bg-panel px-3 text-[11px] md:flex">
       <span className="flex items-center gap-1.5">
         <span className="status-dot text-success" /> 1,284 up
       </span>

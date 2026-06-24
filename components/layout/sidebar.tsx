@@ -18,8 +18,6 @@ import {
   Cpu,
   Server,
   Wifi,
-  Users,
-  KeyRound,
   LogOut,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -70,8 +68,6 @@ const nav: NavSection[] = [
     section: "System",
     items: [
       { href: "/settings", label: "Settings", icon: Cog },
-      { href: "/settings/users", label: "Users", icon: Users },
-      { href: "/settings/oidc", label: "OIDC / SSO", icon: KeyRound },
     ],
   },
 ];
