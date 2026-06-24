@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import {
-  Globe2, Router, Wifi, Server, Filter, Download,
+  Globe2, Router, Wifi, Server, Filter, Download, Network,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { TopBar } from "@/components/layout/top-bar";
@@ -88,6 +88,9 @@ export default async function OverviewPage() {
             <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-panel px-3 text-xs hover:bg-elevated">
               <Download className="h-3.5 w-3.5" /> Export
             </button>
+            <Link href="/topology" className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-panel px-3 text-xs hover:bg-elevated">
+              <Network className="h-3.5 w-3.5" /> Network Map
+            </Link>
           </>
         }
       />

@@ -17,7 +17,7 @@ import type { StatusKind } from '@/types';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type Tab = 'overview' | 'oidc' | 'users' | 'collectors' | 'integrations';
+type Tab = 'overview' | 'oidc' | 'users' | 'collectors' | 'integrations' | 'discovery';
 
 type ProviderType = 'google' | 'telegram' | 'keycloak' | 'authentik' | 'authelia' | 'custom';
 
@@ -45,6 +45,7 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'users',       label: 'Users' },
   { key: 'collectors',  label: 'Collectors' },
   { key: 'integrations',label: 'Integrations' },
+  { key: 'discovery',   label: 'Discovery' },
 ];
 
 const TAB_SUBTITLES: Record<Tab, string> = {
@@ -53,6 +54,7 @@ const TAB_SUBTITLES: Record<Tab, string> = {
   users:        'Manage user accounts and access control',
   collectors:   'Distributed polling agents and their health',
   integrations: 'Notifications, webhooks, ITSM connections',
+  discovery:    'Network scanning, SNMP credentials, auto-discovery rules',
 };
 
 const PROVIDER_TYPES: { value: ProviderType; label: string }[] = [
@@ -606,6 +608,25 @@ export default function SettingsPage() {
 
         {tab === 'collectors'  && <ComingSoon title="Collector Management" />}
         {tab === 'integrations' && <ComingSoon title="Integration Management" />}
+
+        {/* ── Discovery ─────────────────────────────────────────────────── */}
+        {tab === 'discovery' && (
+          <div className="space-y-4">
+            <Panel title="Discovery Agents" subtitle="Scan ranges, credentials, scheduling">
+              <div className="py-8 text-center">
+                <p className="text-sm text-muted-foreground">
+                  Discovery is managed on the dedicated page.
+                </p>
+                <a
+                  href="/discovery"
+                  className="mt-3 inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs font-medium text-primary-foreground hover:opacity-90"
+                >
+                  Open Discovery →
+                </a>
+              </div>
+            </Panel>
+          </div>
+        )}
 
       </main>
 

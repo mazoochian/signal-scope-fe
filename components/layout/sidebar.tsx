@@ -5,9 +5,6 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   Activity,
-  Radar,
-  Network,
-  Boxes,
   BellRing,
   Workflow,
   GitBranch,
@@ -17,7 +14,6 @@ import {
   Cog,
   Cpu,
   Server,
-  Wifi,
   LogOut,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -38,30 +34,26 @@ interface NavSection {
 
 const nav: NavSection[] = [
   {
-    section: "Operate",
+    section: "Observe",
     items: [
-      { href: "/", label: "Overview", icon: Activity },
-      { href: "/topology", label: "Topology", icon: Network },
-      { href: "/alerts", label: "Alerts", icon: BellRing, badge: "37" },
+      { href: "/",         label: "Overview",          icon: Activity },
+      { href: "/alerts",   label: "Alerts",            icon: BellRing, badge: "37" },
       { href: "/services", label: "Service Assurance", icon: ShieldCheck },
     ],
   },
   {
-    section: "Monitor",
+    section: "Network",
     items: [
-      { href: "/devices", label: "Devices", icon: Server },
+      { href: "/devices",    label: "Devices",    icon: Server },
       { href: "/interfaces", label: "Interfaces", icon: Waves },
-      { href: "/wireless", label: "Wireless", icon: Wifi },
-      { href: "/telemetry", label: "Flow & Telemetry", icon: GitBranch },
+      { href: "/telemetry",  label: "Telemetry",  icon: GitBranch },
     ],
   },
   {
     section: "Manage",
     items: [
-      { href: "/discovery", label: "Discovery", icon: Radar },
       { href: "/configuration", label: "Configuration", icon: Workflow },
-      { href: "/inventory", label: "Inventory", icon: Boxes },
-      { href: "/reports", label: "Reports", icon: FileBarChart2 },
+      { href: "/reports",       label: "Reports",       icon: FileBarChart2 },
     ],
   },
   {
