@@ -2,11 +2,9 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect, useState } from "react";
 import {
   Activity,
-  Radar,
-  Network,
-  Boxes,
   BellRing,
   Workflow,
   GitBranch,
@@ -16,9 +14,11 @@ import {
   Cog,
   Cpu,
   Server,
-  Wifi,
+  LogOut,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { getMe, logout } from "@/lib/auth-client";
+import type { UserDto } from "@/lib/auth-client";
 
 interface NavItem {
   href: string;
@@ -34,40 +34,51 @@ interface NavSection {
 
 const nav: NavSection[] = [
   {
-    section: "Operate",
+    section: "Observe",
     items: [
-      { href: "/", label: "Overview", icon: Activity },
-      { href: "/topology", label: "Topology", icon: Network },
-      { href: "/alerts", label: "Alerts", icon: BellRing, badge: "37" },
+      { href: "/",         label: "Overview",          icon: Activity },
+      { href: "/alerts",   label: "Alerts",            icon: BellRing, badge: "37" },
       { href: "/services", label: "Service Assurance", icon: ShieldCheck },
     ],
   },
   {
-    section: "Monitor",
+    section: "Network",
     items: [
-      { href: "/devices", label: "Devices", icon: Server },
+      { href: "/devices",    label: "Devices",    icon: Server },
       { href: "/interfaces", label: "Interfaces", icon: Waves },
-      { href: "/wireless", label: "Wireless", icon: Wifi },
-      { href: "/telemetry", label: "Flow & Telemetry", icon: GitBranch },
+      { href: "/telemetry",  label: "Telemetry",  icon: GitBranch },
     ],
   },
   {
     section: "Manage",
     items: [
-      { href: "/discovery", label: "Discovery", icon: Radar },
       { href: "/configuration", label: "Configuration", icon: Workflow },
-      { href: "/inventory", label: "Inventory", icon: Boxes },
-      { href: "/reports", label: "Reports", icon: FileBarChart2 },
+      { href: "/reports",       label: "Reports",       icon: FileBarChart2 },
     ],
   },
   {
     section: "System",
-    items: [{ href: "/settings", label: "Settings", icon: Cog }],
+    items: [
+      { href: "/settings", label: "Settings", icon: Cog },
+    ],
   },
 ];
 
+function initials(user: UserDto): string {
+  const f = user.firstName?.[0] ?? '';
+  const l = user.lastName?.[0] ?? '';
+  return (f + l).toUpperCase() || user.email[0].toUpperCase();
+}
+
 export function Sidebar() {
   const pathname = usePathname();
+  const [me, setMe] = useState<UserDto | null>(null);
+
+  useEffect(() => {
+    getMe().then(setMe).catch(() => setMe(null));
+  }, []);
+
+  if (pathname === '/login') return null;
 
   return (
     <aside className="hidden md:flex w-60 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
@@ -84,7 +95,7 @@ export function Sidebar() {
         <div className="leading-tight">
           <div className="text-sm font-semibold tracking-tight">SignalScope</div>
           <div className="text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-            NMS · v4.2
+            NMS · v1.0.0
           </div>
         </div>
       </div>
@@ -140,15 +151,23 @@ export function Sidebar() {
       <div className="border-t border-sidebar-border p-3">
         <div className="flex items-center gap-2 rounded-md bg-sidebar-accent/60 p-2">
           <div className="grid h-7 w-7 place-items-center rounded-full bg-primary/20 text-primary text-xs font-semibold">
-            JR
+            {me ? initials(me) : '?'}
           </div>
-          <div className="min-w-0 leading-tight">
-            <div className="truncate text-xs font-medium">j.ramirez</div>
-            <div className="truncate text-[10px] text-muted-foreground">
-              NOC Engineer · L2
+          <div className="min-w-0 flex-1 leading-tight">
+            <div className="truncate text-xs font-medium">
+              {me ? (me.firstName ? `${me.firstName} ${me.lastName ?? ''}`.trim() : me.email) : '—'}
+            </div>
+            <div className="truncate text-[10px] text-muted-foreground capitalize">
+              {me?.role ?? ''}
             </div>
           </div>
-          <div className="ml-auto status-dot text-success" />
+          <button
+            onClick={() => logout()}
+            title="Sign out"
+            className="ml-auto text-muted-foreground hover:text-foreground"
+          >
+            <LogOut className="h-3.5 w-3.5" />
+          </button>
         </div>
       </div>
     </aside>

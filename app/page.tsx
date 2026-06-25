@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import {
-  Globe2, Router, Wifi, Server, Filter, Download,
+  Globe2, Router, Wifi, Server, Filter, Download, Network,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { TopBar } from "@/components/layout/top-bar";
@@ -87,6 +88,9 @@ export default async function OverviewPage() {
             <button className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-panel px-3 text-xs hover:bg-elevated">
               <Download className="h-3.5 w-3.5" /> Export
             </button>
+            <Link href="/topology" className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-panel px-3 text-xs hover:bg-elevated">
+              <Network className="h-3.5 w-3.5" /> Network Map
+            </Link>
           </>
         }
       />
@@ -117,15 +121,17 @@ export default async function OverviewPage() {
           >
             <ul className="space-y-2">
               {alerts.map((a) => (
-                <li key={a.id} className="group flex items-start gap-3 rounded-md border border-border bg-elevated/40 p-2.5 hover:border-primary/40">
-                  <StatusPill kind={a.kind}>{a.sev}</StatusPill>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-xs font-medium">{a.title}</div>
-                    <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">
-                      {a.device} · {a.ago}
+                <li key={a.id}>
+                  <Link href="/alerts" className="group flex items-start gap-3 rounded-md border border-border bg-elevated/40 p-2.5 hover:border-primary/40 transition-colors block">
+                    <StatusPill kind={a.kind}>{a.sev}</StatusPill>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-xs font-medium">{a.title}</div>
+                      <div className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+                        {a.device} · {a.ago}
+                      </div>
                     </div>
-                  </div>
-                  <span className="text-[10px] text-muted-foreground">{a.rc}</span>
+                    <span className="text-[10px] text-muted-foreground">{a.rc}</span>
+                  </Link>
                 </li>
               ))}
             </ul>
@@ -170,18 +176,24 @@ export default async function OverviewPage() {
             </table>
           </Panel>
 
-          <Panel title="Resource Utilization" subtitle="This server · live">
+          <Panel
+            title="Resource Utilization"
+            subtitle="This server · live"
+            actions={<Link href="/devices" className="text-[11px] text-primary hover:underline">View devices</Link>}
+          >
             <ResourceLive initialData={hostData} />
             <div className="mt-3 grid grid-cols-3 gap-2 text-[11px]">
-              <DeviceTypeBox icon={Router} n={184} l="Routers" />
-              <DeviceTypeBox icon={Server} n={612} l="Switches" />
-              <DeviceTypeBox icon={Wifi}   n={518} l="APs" />
+              <Link href="/devices"><DeviceTypeBox icon={Router} n={184} l="Routers" /></Link>
+              <Link href="/devices"><DeviceTypeBox icon={Server} n={612} l="Switches" /></Link>
+              <Link href="/devices"><DeviceTypeBox icon={Wifi}   n={518} l="APs" /></Link>
             </div>
           </Panel>
         </div>
 
         <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
-          <Panel className="lg:col-span-2" title="Service Assurance" subtitle="End-to-end business services">
+          <Panel className="lg:col-span-2" title="Service Assurance" subtitle="End-to-end business services"
+            actions={<Link href="/services" className="text-[11px] text-primary hover:underline">View all</Link>}
+          >
             <div className="grid gap-3 sm:grid-cols-2">
               {services.map((s) => (
                 <div key={s.name} className="rounded-md border border-border bg-elevated/40 p-3">
