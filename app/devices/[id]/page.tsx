@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import {
   ArrowLeft, Server, Router, Wifi, Shield, Activity,
-  Cpu, HardDrive, Globe, Gauge, AlertTriangle, CheckCircle, XCircle,
+  Cpu, HardDrive, Globe, Gauge, AlertTriangle, CheckCircle, XCircle, MinusCircle,
   ExternalLink
 } from 'lucide-react';
 import { TopBar } from '@/components/layout/top-bar';
@@ -27,7 +27,7 @@ interface DeviceDetail {
 
 interface Interface {
   id: number; name: string; description: string; speed: string;
-  vlan: string | null; status: string; duplex: string;
+  vlan: string | null; status: string; adminStatus: string; duplex: string;
 }
 
 interface DeviceHistory {
@@ -57,9 +57,10 @@ function MetricCard({ label, value, unit, icon: Icon, color }: {
   );
 }
 
-function IfaceStatusIcon({ status }: { status: string }) {
-  if (status === 'up') return <CheckCircle className="h-3.5 w-3.5 text-success" />;
-  if (status === 'down') return <XCircle className="h-3.5 w-3.5 text-critical" />;
+function IfaceStatusIcon({ status, adminStatus }: { status: string; adminStatus: string }) {
+  if (adminStatus === 'down') return <span title="Admin-down"><MinusCircle className="h-3.5 w-3.5 text-muted-foreground" /></span>;
+  if (status === 'up')        return <CheckCircle  className="h-3.5 w-3.5 text-success" />;
+  if (status === 'down')      return <span title="Error down"><XCircle className="h-3.5 w-3.5 text-critical" /></span>;
   return <AlertTriangle className="h-3.5 w-3.5 text-warning" />;
 }
 
@@ -224,7 +225,7 @@ export default function DeviceDetailPage() {
 
         {/* Interfaces */}
         {ifaces.length > 0 && (
-          <Panel title="Interfaces" subtitle={`${ifaces.length} configured · ${ifaces.filter(i => i.status === 'up').length} up`}>
+          <Panel title="Interfaces" subtitle={`${ifaces.length} configured · ${ifaces.filter(i => i.adminStatus !== 'down' && i.status === 'up').length} up · ${ifaces.filter(i => i.adminStatus === 'down').length} admin-down`}>
             <table className="w-full text-xs">
               <thead className="text-[10px] uppercase tracking-wide text-muted-foreground border-b border-border">
                 <tr>
@@ -235,9 +236,9 @@ export default function DeviceDetailPage() {
               </thead>
               <tbody className="divide-y divide-border">
                 {ifaces.map((iface) => (
-                  <tr key={iface.id} className="hover:bg-elevated/40">
+                  <tr key={iface.id} className={`hover:bg-elevated/40 ${iface.adminStatus === 'down' ? 'opacity-60' : ''}`}>
                     <td className="px-2 py-2">
-                      <IfaceStatusIcon status={iface.status} />
+                      <IfaceStatusIcon status={iface.status} adminStatus={iface.adminStatus} />
                     </td>
                     <td className="px-2 py-2 font-mono">{iface.name}</td>
                     <td className="px-2 py-2 text-muted-foreground">{iface.description || '—'}</td>
