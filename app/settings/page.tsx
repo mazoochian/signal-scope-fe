@@ -5,6 +5,7 @@ import {
   Plus, Pencil, Trash2, X, Check, Loader2,
   ShieldPlus, ShieldMinus,
   KeyRound, Users, Lock, ServerCog, Webhook, Mail, Send,
+  Play, AlertCircle, CheckCircle2, Hash,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { TopBar } from '@/components/layout/top-bar';
@@ -36,6 +37,31 @@ interface UserForm {
   email: string; firstName: string; lastName: string;
   age: string; role: string; password: string; isActive: boolean;
 }
+
+interface EmailIntegration {
+  enabled: boolean;
+  host: string;
+  port: string;
+  security: 'starttls' | 'ssl' | 'none';
+  username: string;
+  password: string;
+  fromName: string;
+  fromAddress: string;
+}
+
+interface TelegramIntegration {
+  enabled: boolean;
+  botToken: string;
+  defaultChatId: string;
+}
+
+interface SlackIntegration {
+  enabled: boolean;
+  botToken: string;
+  defaultChannel: string;
+}
+
+type IntegrationKind = 'email' | 'telegram' | 'slack';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -116,6 +142,16 @@ function defaultUserForm(): UserForm {
   return { email: '', firstName: '', lastName: '', age: '', role: 'viewer', password: '', isActive: true };
 }
 
+function defaultEmailForm(): EmailIntegration {
+  return { enabled: false, host: '', port: '587', security: 'starttls', username: '', password: '', fromName: 'SignalScope NMS', fromAddress: '' };
+}
+function defaultTelegramForm(): TelegramIntegration {
+  return { enabled: false, botToken: '', defaultChatId: '' };
+}
+function defaultSlackForm(): SlackIntegration {
+  return { enabled: false, botToken: '', defaultChannel: '#noc-alerts' };
+}
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -188,10 +224,27 @@ export default function SettingsPage() {
   const [grants, setGrants] = useState<AccessGrant[]>([]);
   const [newGrant, setNewGrant] = useState({ resourceType: 'site', resourceId: '', permission: 'read' });
 
+  // ── Integrations state ─────────────────────────────────────────────────────
+  const [integrationsLoaded,  setIntegrationsLoaded]  = useState(false);
+  const [integrationsLoading, setIntegrationsLoading] = useState(false);
+  const [integrationsError,   setIntegrationsError]   = useState<string | null>(null);
+  const [emailConfig,    setEmailConfig]    = useState<EmailIntegration | null>(null);
+  const [telegramConfig, setTelegramConfig] = useState<TelegramIntegration | null>(null);
+  const [slackConfig,    setSlackConfig]    = useState<SlackIntegration | null>(null);
+  const [editingIntegration, setEditingIntegration] = useState<IntegrationKind | null>(null);
+  const [emailForm,    setEmailForm]    = useState<EmailIntegration>(defaultEmailForm());
+  const [telegramForm, setTelegramForm] = useState<TelegramIntegration>(defaultTelegramForm());
+  const [slackForm,    setSlackForm]    = useState<SlackIntegration>(defaultSlackForm());
+  const [integrationSaving,  setIntegrationSaving]  = useState(false);
+  const [integrationTesting, setIntegrationTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [testEmail,  setTestEmail]  = useState('');
+
   // Lazy-load tab data on first switch
   useEffect(() => {
-    if (tab === 'oidc' && !oidcLoaded) loadProviders();
-    if (tab === 'users' && !usersLoaded) loadUsers();
+    if (tab === 'oidc'         && !oidcLoaded)          loadProviders();
+    if (tab === 'users'        && !usersLoaded)         loadUsers();
+    if (tab === 'integrations' && !integrationsLoaded)  loadIntegrations();
   }, [tab]);
 
   // ── OIDC handlers ──────────────────────────────────────────────────────────
@@ -367,6 +420,75 @@ export default function SettingsPage() {
     if (!grantsUserId) return;
     await apiCall(`/users/${grantsUserId}/grants/${grantId}`, 'DELETE');
     openGrants(grantsUserId);
+  }
+
+  // ── Integration handlers ───────────────────────────────────────────────────
+
+  async function loadIntegrations() {
+    setIntegrationsLoading(true);
+    setIntegrationsError(null);
+    try {
+      const [email, telegram, slack] = await Promise.all([
+        apiCall('/integrations/email',    'GET').catch(() => null),
+        apiCall('/integrations/telegram', 'GET').catch(() => null),
+        apiCall('/integrations/slack',    'GET').catch(() => null),
+      ]);
+      if (email)    setEmailConfig(email);
+      if (telegram) setTelegramConfig(telegram);
+      if (slack)    setSlackConfig(slack);
+      setIntegrationsLoaded(true);
+    } catch (e: any) {
+      setIntegrationsError(e.message);
+    } finally {
+      setIntegrationsLoading(false);
+    }
+  }
+
+  function openIntegrationEdit(kind: IntegrationKind) {
+    setTestResult(null);
+    setTestEmail('');
+    setIntegrationsError(null);
+    if (kind === 'email')    setEmailForm(emailConfig       ?? defaultEmailForm());
+    if (kind === 'telegram') setTelegramForm(telegramConfig ?? defaultTelegramForm());
+    if (kind === 'slack')    setSlackForm(slackConfig       ?? defaultSlackForm());
+    setEditingIntegration(kind);
+  }
+
+  async function saveIntegration() {
+    if (!editingIntegration) return;
+    setIntegrationSaving(true);
+    setIntegrationsError(null);
+    try {
+      const body = editingIntegration === 'email'    ? emailForm
+                 : editingIntegration === 'telegram' ? telegramForm
+                 : slackForm;
+      const saved = await apiCall(`/integrations/${editingIntegration}`, 'PUT', body);
+      if (editingIntegration === 'email')    setEmailConfig(saved);
+      if (editingIntegration === 'telegram') setTelegramConfig(saved);
+      if (editingIntegration === 'slack')    setSlackConfig(saved);
+      setEditingIntegration(null);
+    } catch (e: any) {
+      setIntegrationsError(e.message);
+    } finally {
+      setIntegrationSaving(false);
+    }
+  }
+
+  async function testIntegration() {
+    if (!editingIntegration) return;
+    setIntegrationTesting(true);
+    setTestResult(null);
+    try {
+      const body = editingIntegration === 'email'
+        ? { ...emailForm, testRecipient: testEmail || emailForm.username }
+        : editingIntegration === 'telegram' ? telegramForm : slackForm;
+      await apiCall(`/integrations/${editingIntegration}/test`, 'POST', body);
+      setTestResult({ ok: true, message: 'Test message sent successfully.' });
+    } catch (e: any) {
+      setTestResult({ ok: false, message: e.message });
+    } finally {
+      setIntegrationTesting(false);
+    }
   }
 
   // ── Derived ────────────────────────────────────────────────────────────────
@@ -605,7 +727,47 @@ export default function SettingsPage() {
         )}
 
         {tab === 'collectors'  && <ComingSoon title="Collector Management" />}
-        {tab === 'integrations' && <ComingSoon title="Integration Management" />}
+
+        {/* ── Integrations ──────────────────────────────────────────────────── */}
+        {tab === 'integrations' && (
+          <div className="space-y-4">
+            {integrationsError && !editingIntegration && (
+              <div className="rounded-md bg-critical/10 px-3 py-2 text-xs text-critical">{integrationsError}</div>
+            )}
+            {integrationsLoading ? (
+              <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
+                <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Loading…
+              </div>
+            ) : (
+              <>
+                <IntegrationCard
+                  title="Email / SMTP"
+                  subtitle="Outbound mailbox for alerts and scheduled reports"
+                  icon={Mail}
+                  config={emailConfig}
+                  summary={emailConfig ? `${emailConfig.host}:${emailConfig.port} · ${emailConfig.fromAddress || emailConfig.username}` : undefined}
+                  onConfigure={() => openIntegrationEdit('email')}
+                />
+                <IntegrationCard
+                  title="Telegram Bot"
+                  subtitle="Send alerts and reports to Telegram channels or groups"
+                  icon={Send}
+                  config={telegramConfig}
+                  summary={telegramConfig ? `Chat ID: ${telegramConfig.defaultChatId}` : undefined}
+                  onConfigure={() => openIntegrationEdit('telegram')}
+                />
+                <IntegrationCard
+                  title="Slack Bot"
+                  subtitle="Post alerts and reports to Slack channels"
+                  icon={Hash}
+                  config={slackConfig}
+                  summary={slackConfig ? `Channel: ${slackConfig.defaultChannel}` : undefined}
+                  onConfigure={() => openIntegrationEdit('slack')}
+                />
+              </>
+            )}
+          </div>
+        )}
 
         {/* ── Discovery ─────────────────────────────────────────────────── */}
         {tab === 'discovery' && (
@@ -858,6 +1020,208 @@ export default function SettingsPage() {
           </div>
         </div>
       )}
+      {/* ── Integration: Configure modal ─────────────────────────────────────── */}
+      {editingIntegration && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+          <div className="w-full max-w-lg rounded-xl border border-border bg-panel p-6 shadow-2xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-sm font-semibold">
+                {editingIntegration === 'email' ? 'Email / SMTP'
+                  : editingIntegration === 'telegram' ? 'Telegram Bot'
+                  : 'Slack Bot'}
+              </h2>
+              <button onClick={() => setEditingIntegration(null)}><X className="h-4 w-4 text-muted-foreground" /></button>
+            </div>
+
+            {integrationsError && (
+              <div className="mb-3 rounded-md bg-critical/10 px-3 py-2 text-xs text-critical">{integrationsError}</div>
+            )}
+
+            <div className="max-h-[65vh] space-y-3 overflow-y-auto pr-1">
+
+              {/* Email fields */}
+              {editingIntegration === 'email' && (
+                <>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="col-span-2">
+                      <Field label="SMTP Host">
+                        <input value={emailForm.host} onChange={(e) => setEmailForm({ ...emailForm, host: e.target.value })} className="input" placeholder="smtp.example.com" />
+                      </Field>
+                    </div>
+                    <Field label="Port">
+                      <input type="number" value={emailForm.port} onChange={(e) => setEmailForm({ ...emailForm, port: e.target.value })} className="input" placeholder="587" />
+                    </Field>
+                  </div>
+                  <Field label="Security">
+                    <select value={emailForm.security} onChange={(e) => setEmailForm({ ...emailForm, security: e.target.value as EmailIntegration['security'] })} className="input">
+                      <option value="starttls">STARTTLS (recommended · port 587)</option>
+                      <option value="ssl">SSL / TLS (port 465)</option>
+                      <option value="none">None / plaintext (port 25)</option>
+                    </select>
+                  </Field>
+                  <Field label="Username (mailbox address)">
+                    <input type="email" value={emailForm.username} onChange={(e) => setEmailForm({ ...emailForm, username: e.target.value })} className="input" placeholder="alerts@example.com" />
+                  </Field>
+                  <Field label="Password">
+                    <input type="password" value={emailForm.password} onChange={(e) => setEmailForm({ ...emailForm, password: e.target.value })} className="input" />
+                  </Field>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Field label="From Name">
+                      <input value={emailForm.fromName} onChange={(e) => setEmailForm({ ...emailForm, fromName: e.target.value })} className="input" placeholder="SignalScope NMS" />
+                    </Field>
+                    <Field label="From Address">
+                      <input type="email" value={emailForm.fromAddress} onChange={(e) => setEmailForm({ ...emailForm, fromAddress: e.target.value })} className="input" placeholder="alerts@example.com" />
+                    </Field>
+                  </div>
+                  <label className="flex items-center gap-2 text-xs">
+                    <input type="checkbox" checked={emailForm.enabled} onChange={(e) => setEmailForm({ ...emailForm, enabled: e.target.checked })} />
+                    Enabled
+                  </label>
+                  <div className="border-t border-border pt-3">
+                    <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Send Test Email</p>
+                    <div className="flex gap-2">
+                      <input type="email" placeholder="recipient@example.com" value={testEmail}
+                        onChange={(e) => setTestEmail(e.target.value)} className="input flex-1" />
+                      <button onClick={testIntegration} disabled={integrationTesting}
+                        className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-panel px-3 text-xs hover:bg-elevated disabled:opacity-50">
+                        {integrationTesting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+                        Test
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* Telegram fields */}
+              {editingIntegration === 'telegram' && (
+                <>
+                  <Field label="Bot Token (from @BotFather)">
+                    <input type="password" value={telegramForm.botToken}
+                      onChange={(e) => setTelegramForm({ ...telegramForm, botToken: e.target.value })}
+                      className="input" placeholder="123456789:AABBcc…" />
+                  </Field>
+                  <Field label="Default Chat ID">
+                    <input value={telegramForm.defaultChatId}
+                      onChange={(e) => setTelegramForm({ ...telegramForm, defaultChatId: e.target.value })}
+                      className="input" placeholder="-1001234567890 or @channelname" />
+                  </Field>
+                  <p className="text-[11px] text-muted-foreground">
+                    Use a negative chat ID for groups/supergroups/channels. Add the bot to the channel and grant it posting permissions before testing.
+                  </p>
+                  <label className="flex items-center gap-2 text-xs">
+                    <input type="checkbox" checked={telegramForm.enabled} onChange={(e) => setTelegramForm({ ...telegramForm, enabled: e.target.checked })} />
+                    Enabled
+                  </label>
+                  <div className="border-t border-border pt-3">
+                    <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Send Test Message</p>
+                    <button onClick={testIntegration} disabled={integrationTesting}
+                      className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-panel px-3 text-xs hover:bg-elevated disabled:opacity-50">
+                      {integrationTesting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+                      Send to {telegramForm.defaultChatId || 'default chat'}
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {/* Slack fields */}
+              {editingIntegration === 'slack' && (
+                <>
+                  <Field label="Bot Token (xoxb-…)">
+                    <input type="password" value={slackForm.botToken}
+                      onChange={(e) => setSlackForm({ ...slackForm, botToken: e.target.value })}
+                      className="input" placeholder="xoxb-…" />
+                  </Field>
+                  <Field label="Default Channel">
+                    <input value={slackForm.defaultChannel}
+                      onChange={(e) => setSlackForm({ ...slackForm, defaultChannel: e.target.value })}
+                      className="input" placeholder="#noc-alerts" />
+                  </Field>
+                  <p className="text-[11px] text-muted-foreground">
+                    Create a Slack app, add the <code className="font-mono text-[10px]">chat:write</code> scope, install it to your workspace, then invite the bot to the channel with <code className="font-mono text-[10px]">/invite @botname</code>.
+                  </p>
+                  <label className="flex items-center gap-2 text-xs">
+                    <input type="checkbox" checked={slackForm.enabled} onChange={(e) => setSlackForm({ ...slackForm, enabled: e.target.checked })} />
+                    Enabled
+                  </label>
+                  <div className="border-t border-border pt-3">
+                    <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Send Test Message</p>
+                    <button onClick={testIntegration} disabled={integrationTesting}
+                      className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-panel px-3 text-xs hover:bg-elevated disabled:opacity-50">
+                      {integrationTesting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+                      Send to {slackForm.defaultChannel || 'default channel'}
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {/* Test result banner */}
+              {testResult && (
+                <div className={`flex items-center gap-2 rounded-md px-3 py-2 text-xs ${testResult.ok ? 'bg-success/10 text-success' : 'bg-critical/10 text-critical'}`}>
+                  {testResult.ok
+                    ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                    : <AlertCircle  className="h-3.5 w-3.5 shrink-0" />}
+                  {testResult.message}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button onClick={() => setEditingIntegration(null)} className="h-8 rounded-md border border-border px-3 text-xs hover:bg-elevated">Cancel</button>
+              <button onClick={saveIntegration} disabled={integrationSaving}
+                className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs text-primary-foreground disabled:opacity-50">
+                {integrationSaving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                <Check className="h-3.5 w-3.5" /> Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
+  );
+}
+
+// ─── IntegrationCard ──────────────────────────────────────────────────────────
+
+interface IntegrationCardProps {
+  title: string;
+  subtitle: string;
+  icon: React.ElementType;
+  config: { enabled: boolean } | null;
+  summary?: string;
+  onConfigure: () => void;
+}
+
+function IntegrationCard({ title, subtitle, icon: Icon, config, summary, onConfigure }: IntegrationCardProps) {
+  return (
+    <Panel
+      title={title}
+      subtitle={subtitle}
+      actions={
+        <div className="flex items-center gap-2">
+          {config ? (
+            <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${config.enabled ? 'bg-success/15 text-success' : 'bg-muted/40 text-muted-foreground'}`}>
+              {config.enabled ? 'active' : 'disabled'}
+            </span>
+          ) : (
+            <span className="rounded-full bg-muted/40 px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">not set</span>
+          )}
+          <button onClick={onConfigure}
+            className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-panel px-2.5 text-[11px] hover:bg-elevated">
+            {config ? <><Pencil className="h-3 w-3" /> Edit</> : 'Configure'}
+          </button>
+        </div>
+      }
+    >
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-elevated">
+          <Icon className="h-4 w-4 text-primary" />
+        </div>
+        {summary ? (
+          <p className="text-xs text-muted-foreground font-mono leading-relaxed">{summary}</p>
+        ) : (
+          <p className="text-xs text-muted-foreground italic">Not configured</p>
+        )}
+      </div>
+    </Panel>
   );
 }
