@@ -19,7 +19,7 @@ import type { StatusKind } from '@/types';
 
 type Tab = 'overview' | 'oidc' | 'users' | 'collectors' | 'integrations' | 'discovery';
 
-type ProviderType = 'google' | 'telegram' | 'keycloak' | 'authentik' | 'authelia' | 'custom';
+type ProviderType = 'google' | 'telegram' | 'slack' | 'oidc';
 
 interface AccessGrant {
   id: number; resourceType: string; resourceId: string | null; permission: string;
@@ -58,24 +58,21 @@ const TAB_SUBTITLES: Record<Tab, string> = {
 };
 
 const PROVIDER_TYPES: { value: ProviderType; label: string }[] = [
-  { value: 'google',    label: 'Google' },
-  { value: 'telegram',  label: 'Telegram' },
-  { value: 'keycloak',  label: 'Keycloak' },
-  { value: 'authentik', label: 'Authentik' },
-  { value: 'authelia',  label: 'Authelia' },
-  { value: 'custom',    label: 'Custom OIDC' },
+  { value: 'oidc',     label: 'Generic OIDC' },
+  { value: 'google',   label: 'Google' },
+  { value: 'slack',    label: 'Slack' },
+  { value: 'telegram', label: 'Telegram' },
 ];
 
 const PROVIDER_HELP: Record<ProviderType, string> = {
-  google:    'Create OAuth 2.0 credentials in Google Cloud Console. Discovery URL is set automatically.',
-  telegram:  'Create a bot via @BotFather. Use the bot token and bot username (without @).',
-  keycloak:  'Use the realm discovery URL: https://your-keycloak/realms/<realm>/.well-known/openid-configuration',
-  authentik: 'Create an OAuth2/OIDC provider in Authentik. Use the discovery URL from the provider details.',
-  authelia:  'Register a client in Authelia config. Use https://your-authelia/.well-known/openid-configuration',
-  custom:    'Enter either a discovery URL or manually specify each endpoint.',
+  oidc:     'Standard OIDC/OAuth2 provider (Authelia, Authentik, Keycloak, or any custom IdP). Enter a discovery URL or specify endpoints manually.',
+  google:   'Create OAuth 2.0 credentials in Google Cloud Console. Discovery URL is set automatically.',
+  slack:    'Create a Slack app with "Sign in with Slack" enabled in the OAuth & Permissions section. Discovery URL is set automatically.',
+  telegram: 'Create a bot via @BotFather. Use the bot token and bot username (without @).',
 };
 
 const GOOGLE_DISCOVERY = 'https://accounts.google.com/.well-known/openid-configuration';
+const SLACK_DISCOVERY  = 'https://slack.com/.well-known/openid-configuration';
 
 const ROLES = ['superadmin', 'admin', 'operator', 'troubleshooter', 'viewer'] as const;
 const RESOURCE_TYPES = ['site', 'device', 'device_role', 'interface', 'all'] as const;
@@ -107,7 +104,7 @@ async function apiCall(path: string, method: string, body?: unknown) {
 
 function defaultProviderForm(): ProviderForm {
   return {
-    name: '', providerType: 'custom', isEnabled: true,
+    name: '', providerType: 'oidc', isEnabled: true,
     clientId: '', clientSecret: '', discoveryUrl: '',
     authorizationEndpoint: '', tokenEndpoint: '', userinfoEndpoint: '',
     scopes: 'openid email profile', botToken: '', botUsername: '',
@@ -240,7 +237,8 @@ export default function SettingsPage() {
       const next = { ...f, [k]: v };
       if (k === 'providerType') {
         if (v === 'google') next.discoveryUrl = GOOGLE_DISCOVERY;
-        else if (f.discoveryUrl === GOOGLE_DISCOVERY) next.discoveryUrl = '';
+        else if (v === 'slack') next.discoveryUrl = SLACK_DISCOVERY;
+        else if (f.discoveryUrl === GOOGLE_DISCOVERY || f.discoveryUrl === SLACK_DISCOVERY) next.discoveryUrl = '';
       }
       return next;
     });
@@ -373,8 +371,8 @@ export default function SettingsPage() {
 
   // ── Derived ────────────────────────────────────────────────────────────────
 
-  const isTelegram = providerForm.providerType === 'telegram';
-  const isGoogle   = providerForm.providerType === 'google';
+  const isTelegram      = providerForm.providerType === 'telegram';
+  const isAutoDiscovery = providerForm.providerType === 'google' || providerForm.providerType === 'slack';
 
   const tabActions: Partial<Record<Tab, React.ReactNode>> = {
     oidc: (
@@ -677,15 +675,15 @@ export default function SettingsPage() {
                   <Field label="Client Secret">
                     <input type="password" value={providerForm.clientSecret} onChange={(e) => setProviderField('clientSecret', e.target.value)} className="input" />
                   </Field>
-                  <Field label={`Discovery URL${isGoogle ? ' (auto-set)' : ''}`}>
+                  <Field label={`Discovery URL${isAutoDiscovery ? ' (auto-set)' : ''}`}>
                     <input
                       value={providerForm.discoveryUrl}
                       onChange={(e) => setProviderField('discoveryUrl', e.target.value)}
-                      className="input" readOnly={isGoogle}
-                      placeholder={isGoogle ? GOOGLE_DISCOVERY : 'https://…/.well-known/openid-configuration'}
+                      className="input" readOnly={isAutoDiscovery}
+                      placeholder="https://…/.well-known/openid-configuration"
                     />
                   </Field>
-                  {!isGoogle && (
+                  {!isAutoDiscovery && (
                     <>
                       <details className="text-xs">
                         <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
