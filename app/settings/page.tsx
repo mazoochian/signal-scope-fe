@@ -7,6 +7,7 @@ import {
   ShieldPlus, ShieldMinus,
   KeyRound, Users, Lock, ServerCog, Webhook, Mail, Send,
   Play, AlertCircle, CheckCircle2, Hash, ChevronRight,
+  UsersRound, UserMinus,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { TopBar } from '@/components/layout/top-bar';
@@ -21,6 +22,18 @@ import type { StatusKind } from '@/types';
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 type Tab = 'overview' | 'profile' | 'oidc' | 'users' | 'collectors' | 'integrations' | 'discovery';
+
+interface GroupDto {
+  id: number; name: string; description: string | null; role: string; memberCount: number;
+}
+
+interface GroupMemberDto {
+  userId: number; email: string; firstName: string | null; lastName: string | null;
+}
+
+interface GroupForm {
+  name: string; description: string; role: string;
+}
 
 type ProviderType = 'google' | 'telegram' | 'slack' | 'oidc';
 
@@ -71,7 +84,7 @@ const TABS: { key: Tab; label: string }[] = [
   { key: 'overview',     label: 'Overview'     },
   { key: 'profile',      label: 'Profile'      },
   { key: 'oidc',         label: 'OIDC / SSO'   },
-  { key: 'users',        label: 'Users'         },
+  { key: 'users',        label: 'Users & Groups' },
   { key: 'collectors',   label: 'Collectors'   },
   { key: 'integrations', label: 'Integrations' },
   { key: 'discovery',    label: 'Discovery'    },
@@ -81,7 +94,7 @@ const TAB_SUBTITLES: Record<Tab, string> = {
   overview:     'Authentication, RBAC, collectors, integrations, audit',
   profile:      'Your name, avatar, and security settings',
   oidc:         'Configure identity providers for single sign-on',
-  users:        'Manage user accounts and access control',
+  users:        'Manage user accounts, groups, and access control',
   collectors:   'Distributed polling agents and their health',
   integrations: 'Notifications, webhooks, ITSM connections',
   discovery:    'Network scanning, SNMP credentials, auto-discovery rules',
@@ -259,6 +272,19 @@ export default function SettingsPage() {
   const [grants, setGrants] = useState<AccessGrant[]>([]);
   const [newGrant, setNewGrant] = useState({ resourceType: 'site', resourceId: '', permission: 'read' });
 
+  // ── Groups state ───────────────────────────────────────────────────────────
+  const [groups, setGroups] = useState<GroupDto[]>([]);
+  const [groupsLoaded, setGroupsLoaded] = useState(false);
+  const [groupsError, setGroupsError] = useState<string | null>(null);
+  const [groupForm, setGroupForm] = useState<GroupForm>({ name: '', description: '', role: 'viewer' });
+  const [editGroup, setEditGroup] = useState<GroupDto | null>(null);
+  const [showGroupForm, setShowGroupForm] = useState(false);
+  const [groupSaving, setGroupSaving] = useState(false);
+  const [deleteGroupId, setDeleteGroupId] = useState<number | null>(null);
+  const [membersGroupId, setMembersGroupId] = useState<number | null>(null);
+  const [groupMembers, setGroupMembers] = useState<GroupMemberDto[]>([]);
+  const [addMemberUserId, setAddMemberUserId] = useState<string>('');
+
   // ── Profile state ──────────────────────────────────────────────────────────
   const [profileUser,    setProfileUser]    = useState<UserDto | null>(null);
   const [profileLoading, setProfileLoading] = useState(false);
@@ -290,6 +316,7 @@ export default function SettingsPage() {
     if (tab === 'profile'      && !profileLoaded)       loadProfile();
     if (tab === 'oidc'         && !oidcLoaded)          loadProviders();
     if (tab === 'users'        && !usersLoaded)         loadUsers();
+    if (tab === 'users'        && !groupsLoaded)        loadGroups();
     if (tab === 'integrations' && !integrationsLoaded)  loadIntegrations();
   }, [tab]);
 
@@ -521,6 +548,85 @@ export default function SettingsPage() {
     openGrants(grantsUserId);
   }
 
+  // ── Groups handlers ────────────────────────────────────────────────────────
+
+  async function loadGroups() {
+    setGroupsError(null);
+    try {
+      const list = await apiCall('/groups', 'GET');
+      setGroups(list ?? []);
+      setGroupsLoaded(true);
+    } catch (e: any) {
+      setGroupsError(e.message);
+    }
+  }
+
+  function openAddGroup() {
+    setGroupForm({ name: '', description: '', role: 'viewer' });
+    setEditGroup(null);
+    setGroupsError(null);
+    setShowGroupForm(true);
+  }
+
+  function openEditGroup(g: GroupDto) {
+    setGroupForm({ name: g.name, description: g.description ?? '', role: g.role });
+    setEditGroup(g);
+    setGroupsError(null);
+    setShowGroupForm(true);
+  }
+
+  async function saveGroup() {
+    setGroupSaving(true);
+    setGroupsError(null);
+    try {
+      const body = {
+        name: groupForm.name,
+        description: groupForm.description || null,
+        role: groupForm.role,
+      };
+      if (editGroup) await apiCall(`/groups/${editGroup.id}`, 'PUT', body);
+      else await apiCall('/groups', 'POST', body);
+      setShowGroupForm(false);
+      loadGroups();
+    } catch (e: any) {
+      setGroupsError(e.message);
+    } finally {
+      setGroupSaving(false);
+    }
+  }
+
+  async function deleteGroup(id: number) {
+    try {
+      await apiCall(`/groups/${id}`, 'DELETE');
+      setDeleteGroupId(null);
+      loadGroups();
+    } catch (e: any) {
+      setGroupsError(e.message);
+    }
+  }
+
+  async function openGroupMembers(groupId: number) {
+    const members = await apiCall(`/groups/${groupId}/members`, 'GET');
+    setGroupMembers(members ?? []);
+    setAddMemberUserId('');
+    setMembersGroupId(groupId);
+  }
+
+  async function addGroupMember() {
+    if (!membersGroupId || !addMemberUserId) return;
+    await apiCall(`/groups/${membersGroupId}/members`, 'POST', { userId: parseInt(addMemberUserId, 10) });
+    await openGroupMembers(membersGroupId);
+    setAddMemberUserId('');
+    loadGroups();
+  }
+
+  async function removeGroupMember(userId: number) {
+    if (!membersGroupId) return;
+    await apiCall(`/groups/${membersGroupId}/members/${userId}`, 'DELETE');
+    await openGroupMembers(membersGroupId);
+    loadGroups();
+  }
+
   // ── Integration handlers ───────────────────────────────────────────────────
 
   async function loadIntegrations() {
@@ -603,10 +709,16 @@ export default function SettingsPage() {
       </button>
     ),
     users: (
-      <button onClick={openAddUser}
-        className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs text-primary-foreground hover:opacity-90">
-        <Plus className="h-3.5 w-3.5" /> Add User
-      </button>
+      <div className="flex gap-2">
+        <button onClick={openAddGroup}
+          className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-panel px-3 text-xs hover:bg-elevated">
+          <Plus className="h-3.5 w-3.5" /> Add Group
+        </button>
+        <button onClick={openAddUser}
+          className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs text-primary-foreground hover:opacity-90">
+          <Plus className="h-3.5 w-3.5" /> Add User
+        </button>
+      </div>
     ),
   };
 
@@ -931,6 +1043,61 @@ export default function SettingsPage() {
           </>
         )}
 
+        {/* ── Groups ───────────────────────────────────────────────────────── */}
+        {tab === 'users' && (
+          <div className="mt-4">
+            {groupsError && !showGroupForm && (
+              <div className="mb-4 rounded-md bg-critical/10 px-3 py-2 text-xs text-critical">{groupsError}</div>
+            )}
+            <Panel title="Groups" subtitle="Named collections of users that share a role">
+              {groups.length === 0 ? (
+                <div className="py-10 text-center text-sm text-muted-foreground">
+                  No groups yet. Create a group to share roles across users.
+                </div>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                    <tr className="border-b border-border">
+                      {['Name', 'Description', 'Role', 'Members', ''].map((h) => (
+                        <th key={h} className="px-3 py-2 text-left font-medium">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {groups.map((g) => (
+                      <tr key={g.id} className="hover:bg-elevated/40">
+                        <td className="px-3 py-2 font-medium">{g.name}</td>
+                        <td className="px-3 py-2 text-muted-foreground">{g.description ?? '—'}</td>
+                        <td className="px-3 py-2">
+                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize ${ROLE_COLOR[g.role] ?? ''}`}>
+                            {g.role}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2">
+                          <button onClick={() => openGroupMembers(g.id)}
+                            className="inline-flex items-center gap-1 rounded border border-border px-2 py-0.5 text-[10px] hover:bg-elevated">
+                            <UsersRound className="h-3 w-3" /> {g.memberCount}
+                          </button>
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            <button onClick={() => openEditGroup(g)} className="rounded p-1 hover:bg-elevated">
+                              <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
+                            </button>
+                            <button onClick={() => setDeleteGroupId(g.id)} className="rounded p-1 hover:bg-elevated">
+                              <Trash2 className="h-3.5 w-3.5 text-critical/70" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </Panel>
+          </div>
+        )}
+
         {tab === 'collectors'  && <ComingSoon title="Collector Management" />}
 
         {/* ── Integrations ──────────────────────────────────────────────────── */}
@@ -1222,6 +1389,125 @@ export default function SettingsPage() {
           </div>
         </div>
       )}
+      {/* ── Groups: Add / Edit modal ────────────────────────────────────────── */}
+      {showGroupForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+          <div className="w-full max-w-md rounded-xl border border-border bg-panel p-6 shadow-2xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-sm font-semibold">{editGroup ? 'Edit Group' : 'Add Group'}</h2>
+              <button onClick={() => setShowGroupForm(false)}><X className="h-4 w-4 text-muted-foreground" /></button>
+            </div>
+            {groupsError && (
+              <div className="mb-3 rounded-md bg-critical/10 px-3 py-2 text-xs text-critical">{groupsError}</div>
+            )}
+            <div className="space-y-3">
+              <Field label="Name">
+                <input value={groupForm.name} onChange={(e) => setGroupForm({ ...groupForm, name: e.target.value })} className="input" placeholder="NOC Level 1" />
+              </Field>
+              <Field label="Description">
+                <input value={groupForm.description} onChange={(e) => setGroupForm({ ...groupForm, description: e.target.value })} className="input" placeholder="Optional description" />
+              </Field>
+              <Field label="Role">
+                <select value={groupForm.role} onChange={(e) => setGroupForm({ ...groupForm, role: e.target.value })} className="input">
+                  {ROLES.map((r) => <option key={r} value={r} className="capitalize">{r}</option>)}
+                </select>
+              </Field>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button onClick={() => setShowGroupForm(false)} className="h-8 rounded-md border border-border px-3 text-xs hover:bg-elevated">Cancel</button>
+              <button onClick={saveGroup} disabled={groupSaving} className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs text-primary-foreground disabled:opacity-50">
+                {groupSaving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                <Check className="h-3.5 w-3.5" /> Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Groups: Delete confirm ───────────────────────────────────────────── */}
+      {deleteGroupId !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+          <div className="w-full max-w-sm rounded-xl border border-border bg-panel p-6 shadow-2xl">
+            <h2 className="mb-2 text-sm font-semibold">Delete Group</h2>
+            <p className="mb-5 text-xs text-muted-foreground">All members will be removed from this group. This cannot be undone.</p>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setDeleteGroupId(null)} className="h-8 rounded-md border border-border px-3 text-xs hover:bg-elevated">Cancel</button>
+              <button onClick={() => deleteGroup(deleteGroupId)} className="h-8 rounded-md bg-critical px-3 text-xs text-white">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Groups: Members modal ────────────────────────────────────────────── */}
+      {membersGroupId !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+          <div className="w-full max-w-lg rounded-xl border border-border bg-panel p-6 shadow-2xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-sm font-semibold">
+                Members — {groups.find((g) => g.id === membersGroupId)?.name}
+              </h2>
+              <button onClick={() => setMembersGroupId(null)}><X className="h-4 w-4 text-muted-foreground" /></button>
+            </div>
+            <div className="mb-4 space-y-1">
+              {groupMembers.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No members yet.</p>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead className="border-b border-border text-[10px] uppercase tracking-wide text-muted-foreground">
+                    <tr>
+                      <th className="pb-1 text-left">Name</th>
+                      <th className="pb-1 text-left">Email</th>
+                      <th />
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {groupMembers.map((m) => (
+                      <tr key={m.userId}>
+                        <td className="py-1.5 pr-2 font-medium">
+                          {m.firstName ? `${m.firstName} ${m.lastName ?? ''}`.trim() : '—'}
+                        </td>
+                        <td className="py-1.5 pr-2 font-mono text-muted-foreground">{m.email}</td>
+                        <td className="py-1.5 text-right">
+                          <button onClick={() => removeGroupMember(m.userId)} title="Remove from group">
+                            <UserMinus className="h-3.5 w-3.5 text-critical/70" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+            <div className="border-t border-border pt-3">
+              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Add Member</p>
+              <div className="flex gap-2">
+                <select
+                  value={addMemberUserId}
+                  onChange={(e) => setAddMemberUserId(e.target.value)}
+                  className="input flex-1"
+                >
+                  <option value="">Select a user…</option>
+                  {users
+                    .filter((u) => !groupMembers.some((m) => m.userId === u.id))
+                    .map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.firstName ? `${u.firstName} ${u.lastName ?? ''}`.trim() : u.email}
+                      </option>
+                    ))}
+                </select>
+                <button
+                  onClick={addGroupMember}
+                  disabled={!addMemberUserId}
+                  className="h-9 rounded-md bg-primary px-3 text-xs text-primary-foreground disabled:opacity-50"
+                >
+                  Add
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Integration: Configure modal ─────────────────────────────────────── */}
       {editingIntegration && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
