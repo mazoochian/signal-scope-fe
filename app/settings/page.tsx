@@ -5,7 +5,7 @@ import {
   Plus, Pencil, Trash2, X, Check, Loader2,
   ShieldPlus, ShieldMinus,
   KeyRound, Users, Lock, ServerCog, Webhook, Mail, Send,
-  Play, AlertCircle, CheckCircle2, Hash,
+  Play, AlertCircle, CheckCircle2, Hash, ChevronRight,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { TopBar } from '@/components/layout/top-bar';
@@ -175,9 +175,9 @@ function ComingSoon({ title }: { title: string }) {
   );
 }
 
-interface OverviewRowProps { l: string; s: string; sub: string; icon: LucideIcon; kind: StatusKind; }
+interface OverviewRowProps { l: string; s: string; sub: string; icon: LucideIcon; kind: StatusKind; onDetail?: () => void; }
 
-function OverviewRow({ l, s, sub, icon: Icon, kind }: OverviewRowProps) {
+function OverviewRow({ l, s, sub, icon: Icon, kind, onDetail }: OverviewRowProps) {
   return (
     <div className="mb-2 flex items-center justify-between rounded-md border border-border bg-elevated/40 p-2.5 last:mb-0">
       <div className="flex min-w-0 items-center gap-2.5">
@@ -189,7 +189,18 @@ function OverviewRow({ l, s, sub, icon: Icon, kind }: OverviewRowProps) {
           <div className="truncate text-[10px] text-muted-foreground">{sub}</div>
         </div>
       </div>
-      <StatusPill kind={kind}>{s}</StatusPill>
+      <div className="flex shrink-0 items-center gap-1.5">
+        <StatusPill kind={kind}>{s}</StatusPill>
+        {onDetail && (
+          <button
+            onClick={onDetail}
+            title="Open settings"
+            className="grid h-6 w-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-elevated hover:text-foreground"
+          >
+            <ChevronRight className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -549,17 +560,25 @@ export default function SettingsPage() {
         {/* ── Overview ─────────────────────────────────────────────────────── */}
         {tab === 'overview' && (
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <Panel title="Authentication" subtitle="SSO · OAuth2 · OIDC · LDAP · MFA">
+            <Panel
+              title="Authentication"
+              subtitle="SSO · OAuth2 · OIDC · LDAP · MFA"
+              actions={<TabLink label="Manage" onClick={() => setTab('oidc')} />}
+            >
               {(
                 [
                   { l: 'Azure AD (OIDC)', s: 'connected', icon: KeyRound, sub: 'tenant: signalscope.io · 412 users', kind: 'up' },
                   { l: 'LDAP / Active Directory', s: 'connected', icon: Users, sub: 'corp.local · sync 5m', kind: 'up' },
                   { l: 'MFA · TOTP + WebAuthn', s: 'enforced', icon: Lock, sub: 'all users · 38 enrolled this week', kind: 'up' },
                 ] as { l: string; s: string; icon: LucideIcon; sub: string; kind: StatusKind }[]
-              ).map((x) => <OverviewRow key={x.l} {...x} />)}
+              ).map((x) => <OverviewRow key={x.l} {...x} onDetail={() => setTab('oidc')} />)}
             </Panel>
 
-            <Panel title="RBAC Roles" subtitle="Least-privilege · approval workflows on write actions">
+            <Panel
+              title="RBAC Roles"
+              subtitle="Least-privilege · approval workflows on write actions"
+              actions={<TabLink label="Manage" onClick={() => setTab('users')} />}
+            >
               <table className="w-full text-xs">
                 <thead className="text-[10px] uppercase tracking-wide text-muted-foreground">
                   <tr className="border-b border-border">
@@ -584,7 +603,11 @@ export default function SettingsPage() {
               </table>
             </Panel>
 
-            <Panel title="Distributed Collectors" subtitle="4 online · 1,314 devices balanced">
+            <Panel
+              title="Distributed Collectors"
+              subtitle="4 online · 1,314 devices balanced"
+              actions={<TabLink label="Manage" onClick={() => setTab('collectors')} />}
+            >
               {(
                 [
                   { l: 'collector-us-east-01', s: 'online',   icon: ServerCog, sub: '412 devices · poll 8.4s · v1.0.0',               kind: 'up' },
@@ -592,10 +615,14 @@ export default function SettingsPage() {
                   { l: 'collector-eu-01',      s: 'online',   icon: ServerCog, sub: '402 devices · poll 7.9s · v1.0.0',               kind: 'up' },
                   { l: 'collector-apac-01',    s: 'degraded', icon: ServerCog, sub: '182 devices · poll 14.2s · v0.9.7 — upgrade pending', kind: 'warn' },
                 ] as { l: string; s: string; icon: LucideIcon; sub: string; kind: StatusKind }[]
-              ).map((x) => <OverviewRow key={x.l} {...x} />)}
+              ).map((x) => <OverviewRow key={x.l} {...x} onDetail={() => setTab('collectors')} />)}
             </Panel>
 
-            <Panel title="Integrations" subtitle="Notifications, webhooks, ITSM">
+            <Panel
+              title="Integrations"
+              subtitle="Notifications, webhooks, ITSM"
+              actions={<TabLink label="Manage" onClick={() => setTab('integrations')} />}
+            >
               {(
                 [
                   { l: 'Slack · #noc-critical',    s: 'active', icon: Webhook, sub: 'sev: critical, major',               kind: 'up' },
@@ -605,7 +632,7 @@ export default function SettingsPage() {
                   { l: 'ServiceNow ITSM',           s: 'active', icon: Webhook, sub: 'auto-create P1/P2 incidents',        kind: 'up' },
                   { l: 'SMTP · alerts@',            s: 'active', icon: Mail,    sub: 'daily digest 07:00 UTC',             kind: 'up' },
                 ] as { l: string; s: string; icon: LucideIcon; sub: string; kind: StatusKind }[]
-              ).map((x) => <OverviewRow key={x.l} {...x} />)}
+              ).map((x) => <OverviewRow key={x.l} {...x} onDetail={() => setTab('integrations')} />)}
             </Panel>
           </div>
         )}
@@ -1177,6 +1204,19 @@ export default function SettingsPage() {
         </div>
       )}
     </>
+  );
+}
+
+// ─── TabLink ─────────────────────────────────────────────────────────────────
+
+function TabLink({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="inline-flex items-center gap-0.5 text-[11px] text-primary hover:underline"
+    >
+      {label} <ChevronRight className="h-3 w-3" />
+    </button>
   );
 }
 
