@@ -13,12 +13,13 @@ import { PageHeader } from '@/components/layout/page-header';
 import { Panel } from '@/components/ui/panel';
 import { StatusPill } from '@/components/ui/status-pill';
 import { API_URL } from '@/lib/api';
+import { getMe } from '@/lib/auth-client';
 import type { OidcProviderDto, UserDto } from '@/lib/auth-client';
 import type { StatusKind } from '@/types';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type Tab = 'overview' | 'oidc' | 'users' | 'collectors' | 'integrations' | 'discovery';
+type Tab = 'overview' | 'profile' | 'oidc' | 'users' | 'collectors' | 'integrations' | 'discovery';
 
 type ProviderType = 'google' | 'telegram' | 'slack' | 'oidc';
 
@@ -35,7 +36,7 @@ interface ProviderForm {
 
 interface UserForm {
   email: string; firstName: string; lastName: string;
-  age: string; role: string; password: string; isActive: boolean;
+  role: string; password: string; isActive: boolean;
 }
 
 interface EmailIntegration {
@@ -66,16 +67,18 @@ type IntegrationKind = 'email' | 'telegram' | 'slack';
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const TABS: { key: Tab; label: string }[] = [
-  { key: 'overview',     label: 'Overview' },
-  { key: 'oidc',        label: 'OIDC / SSO' },
-  { key: 'users',       label: 'Users' },
-  { key: 'collectors',  label: 'Collectors' },
-  { key: 'integrations',label: 'Integrations' },
-  { key: 'discovery',   label: 'Discovery' },
+  { key: 'overview',     label: 'Overview'     },
+  { key: 'profile',      label: 'Profile'      },
+  { key: 'oidc',         label: 'OIDC / SSO'   },
+  { key: 'users',        label: 'Users'         },
+  { key: 'collectors',   label: 'Collectors'   },
+  { key: 'integrations', label: 'Integrations' },
+  { key: 'discovery',    label: 'Discovery'    },
 ];
 
 const TAB_SUBTITLES: Record<Tab, string> = {
   overview:     'Authentication, RBAC, collectors, integrations, audit',
+  profile:      'Your name, avatar, and security settings',
   oidc:         'Configure identity providers for single sign-on',
   users:        'Manage user accounts and access control',
   collectors:   'Distributed polling agents and their health',
@@ -139,7 +142,7 @@ function defaultProviderForm(): ProviderForm {
 }
 
 function defaultUserForm(): UserForm {
-  return { email: '', firstName: '', lastName: '', age: '', role: 'viewer', password: '', isActive: true };
+  return { email: '', firstName: '', lastName: '', role: 'viewer', password: '', isActive: true };
 }
 
 function defaultEmailForm(): EmailIntegration {
@@ -235,6 +238,16 @@ export default function SettingsPage() {
   const [grants, setGrants] = useState<AccessGrant[]>([]);
   const [newGrant, setNewGrant] = useState({ resourceType: 'site', resourceId: '', permission: 'read' });
 
+  // ── Profile state ──────────────────────────────────────────────────────────
+  const [profileUser,    setProfileUser]    = useState<UserDto | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileLoaded,  setProfileLoaded]  = useState(false);
+  const [profileError,   setProfileError]   = useState<string | null>(null);
+  const [profileForm,    setProfileForm]    = useState({ firstName: '', lastName: '' });
+  const [profileSaving,  setProfileSaving]  = useState(false);
+  const [profileSaved,   setProfileSaved]   = useState(false);
+  const [avatarPreview,  setAvatarPreview]  = useState<string | null>(null);
+
   // ── Integrations state ─────────────────────────────────────────────────────
   const [integrationsLoaded,  setIntegrationsLoaded]  = useState(false);
   const [integrationsLoading, setIntegrationsLoading] = useState(false);
@@ -253,10 +266,54 @@ export default function SettingsPage() {
 
   // Lazy-load tab data on first switch
   useEffect(() => {
+    if (tab === 'profile'      && !profileLoaded)       loadProfile();
     if (tab === 'oidc'         && !oidcLoaded)          loadProviders();
     if (tab === 'users'        && !usersLoaded)         loadUsers();
     if (tab === 'integrations' && !integrationsLoaded)  loadIntegrations();
   }, [tab]);
+
+  // ── Profile handlers ──────────────────────────────────────────────────────
+
+  async function loadProfile() {
+    setProfileLoading(true);
+    setProfileError(null);
+    try {
+      const me = await getMe();
+      setProfileUser(me);
+      setProfileForm({ firstName: me.firstName ?? '', lastName: me.lastName ?? '' });
+      setProfileLoaded(true);
+    } catch (e: any) {
+      setProfileError(e.message);
+    } finally {
+      setProfileLoading(false);
+    }
+  }
+
+  async function saveProfile() {
+    if (!profileUser) return;
+    setProfileSaving(true);
+    setProfileError(null);
+    setProfileSaved(false);
+    try {
+      await apiCall(`/users/${profileUser.id}`, 'PUT', {
+        firstName: profileForm.firstName || null,
+        lastName:  profileForm.lastName  || null,
+        role:      profileUser.role,
+        isActive:  profileUser.isActive,
+      });
+      setProfileSaved(true);
+      setTimeout(() => setProfileSaved(false), 3000);
+    } catch (e: any) {
+      setProfileError(e.message);
+    } finally {
+      setProfileSaving(false);
+    }
+  }
+
+  function handleAvatarChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (file) setAvatarPreview(URL.createObjectURL(file));
+  }
 
   // ── OIDC handlers ──────────────────────────────────────────────────────────
 
@@ -372,7 +429,7 @@ export default function SettingsPage() {
   function openEditUser(u: UserDto) {
     setUserForm({
       email: u.email, firstName: u.firstName ?? '', lastName: u.lastName ?? '',
-      age: u.age?.toString() ?? '', role: u.role, password: '', isActive: u.isActive,
+      role: u.role, password: '', isActive: u.isActive,
     });
     setEditUser(u);
     setUsersError(null);
@@ -385,9 +442,9 @@ export default function SettingsPage() {
     try {
       const body: any = {
         firstName: userForm.firstName || null,
-        lastName: userForm.lastName || null,
-        age: userForm.age ? parseInt(userForm.age, 10) : null,
-        role: userForm.role, isActive: userForm.isActive,
+        lastName:  userForm.lastName  || null,
+        role:      userForm.role,
+        isActive:  userForm.isActive,
       };
       if (userForm.password) body.password = userForm.password;
       if (!editUser) { body.email = userForm.email; await apiCall('/users', 'POST', body); }
@@ -567,11 +624,11 @@ export default function SettingsPage() {
             >
               {(
                 [
-                  { l: 'Azure AD (OIDC)', s: 'connected', icon: KeyRound, sub: 'tenant: signalscope.io · 412 users', kind: 'up' },
-                  { l: 'LDAP / Active Directory', s: 'connected', icon: Users, sub: 'corp.local · sync 5m', kind: 'up' },
-                  { l: 'MFA · TOTP + WebAuthn', s: 'enforced', icon: Lock, sub: 'all users · 38 enrolled this week', kind: 'up' },
-                ] as { l: string; s: string; icon: LucideIcon; sub: string; kind: StatusKind }[]
-              ).map((x) => <OverviewRow key={x.l} {...x} onDetail={() => setTab('oidc')} />)}
+                  { l: 'Azure AD (OIDC)',        s: 'connected', icon: KeyRound, sub: 'tenant: signalscope.io · 412 users',     kind: 'up',  tab: 'oidc'    as Tab },
+                  { l: 'LDAP / Active Directory', s: 'connected', icon: Users,    sub: 'corp.local · sync 5m',                    kind: 'up',  tab: 'oidc'    as Tab },
+                  { l: 'MFA · TOTP + WebAuthn',   s: 'enforced',  icon: Lock,     sub: 'all users · 38 enrolled this week',       kind: 'up',  tab: 'profile' as Tab },
+                ] as { l: string; s: string; icon: LucideIcon; sub: string; kind: StatusKind; tab: Tab }[]
+              ).map((x) => <OverviewRow key={x.l} {...x} onDetail={() => setTab(x.tab)} />)}
             </Panel>
 
             <Panel
@@ -634,6 +691,96 @@ export default function SettingsPage() {
                 ] as { l: string; s: string; icon: LucideIcon; sub: string; kind: StatusKind }[]
               ).map((x) => <OverviewRow key={x.l} {...x} onDetail={() => setTab('integrations')} />)}
             </Panel>
+          </div>
+        )}
+
+        {/* ── Profile ──────────────────────────────────────────────────────── */}
+        {tab === 'profile' && (
+          <div className="mx-auto max-w-lg space-y-4">
+            {profileError && (
+              <div className="rounded-md bg-critical/10 px-3 py-2 text-xs text-critical">{profileError}</div>
+            )}
+            {profileLoading ? (
+              <div className="flex items-center justify-center py-20 text-sm text-muted-foreground">
+                <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Loading…
+              </div>
+            ) : (
+              <Panel title="My Profile" subtitle="Update your display name and avatar">
+                {/* Avatar */}
+                <div className="mb-6 flex items-center gap-4">
+                  <div className="relative">
+                    {avatarPreview ? (
+                      <img src={avatarPreview} alt="Avatar preview" className="h-16 w-16 rounded-full object-cover ring-2 ring-border" />
+                    ) : (
+                      <div className="grid h-16 w-16 place-items-center rounded-full bg-primary/20 text-xl font-semibold text-primary">
+                        {profileUser
+                          ? ((profileForm.firstName?.[0] ?? '') + (profileForm.lastName?.[0] ?? '') || profileUser.email[0]).toUpperCase()
+                          : '?'}
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-border bg-panel px-3 py-1.5 text-xs font-medium hover:bg-elevated">
+                      Upload photo
+                      <input type="file" accept="image/*" className="sr-only" onChange={handleAvatarChange} />
+                    </label>
+                    <p className="mt-1 text-[10px] text-muted-foreground">JPG, PNG or WebP · max 2 MB</p>
+                  </div>
+                </div>
+
+                {/* Read-only identity */}
+                <div className="mb-4 space-y-3">
+                  <div>
+                    <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Username / Email</p>
+                    <p className="rounded-md border border-border bg-elevated/40 px-3 py-2 text-xs text-muted-foreground font-mono">
+                      {profileUser?.email ?? '—'}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Role</p>
+                    <p className="text-xs">
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize ${ROLE_COLOR[profileUser?.role ?? ''] ?? 'bg-muted/40 text-muted-foreground'}`}>
+                        {profileUser?.role ?? '—'}
+                      </span>
+                    </p>
+                  </div>
+                </div>
+
+                {/* Editable name */}
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="First Name">
+                    <input
+                      value={profileForm.firstName}
+                      onChange={(e) => setProfileForm({ ...profileForm, firstName: e.target.value })}
+                      className="input"
+                      placeholder="Jane"
+                    />
+                  </Field>
+                  <Field label="Last Name">
+                    <input
+                      value={profileForm.lastName}
+                      onChange={(e) => setProfileForm({ ...profileForm, lastName: e.target.value })}
+                      className="input"
+                      placeholder="Smith"
+                    />
+                  </Field>
+                </div>
+
+                <div className="mt-5 flex items-center gap-3">
+                  <button
+                    onClick={saveProfile}
+                    disabled={profileSaving}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-4 text-xs font-medium text-primary-foreground disabled:opacity-50 hover:opacity-90"
+                  >
+                    {profileSaving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                    <Check className="h-3.5 w-3.5" /> Save changes
+                  </button>
+                  {profileSaved && (
+                    <span className="text-xs text-success">Changes saved.</span>
+                  )}
+                </div>
+              </Panel>
+            )}
           </div>
         )}
 
@@ -948,9 +1095,6 @@ export default function SettingsPage() {
                   <input value={userForm.lastName} onChange={(e) => setUserForm({ ...userForm, lastName: e.target.value })} className="input" />
                 </Field>
               </div>
-              <Field label="Age">
-                <input type="number" value={userForm.age} onChange={(e) => setUserForm({ ...userForm, age: e.target.value })} className="input" min={1} max={120} />
-              </Field>
               <Field label="Role">
                 <select value={userForm.role} onChange={(e) => setUserForm({ ...userForm, role: e.target.value })} className="input">
                   {ROLES.map((r) => <option key={r} value={r} className="capitalize">{r}</option>)}
