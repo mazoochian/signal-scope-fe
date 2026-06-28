@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Plus, Pencil, Trash2, X, Check, Loader2,
   ShieldPlus, ShieldMinus,
@@ -210,8 +211,28 @@ function OverviewRow({ l, s, sub, icon: Icon, kind, onDetail }: OverviewRowProps
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function SettingsPage() {
-  const [tab, setTab] = useState<Tab>('overview');
+  const router = useRouter();
+
+  const [tab, setTab] = useState<Tab>(() => {
+    if (typeof window === 'undefined') return 'overview';
+    const p = new URLSearchParams(window.location.search).get('tab') as Tab | null;
+    return p && TABS.some(t => t.key === p) ? p : 'overview';
+  });
+
+  function navigate(t: Tab) {
+    setTab(t);
+    router.replace(`/settings?tab=${t}`, { scroll: false } as any);
+  }
 
   // ── OIDC state ─────────────────────────────────────────────────────────────
   const [providers, setProviders] = useState<OidcProviderDto[]>([]);
@@ -281,6 +302,7 @@ export default function SettingsPage() {
       const me = await getMe();
       setProfileUser(me);
       setProfileForm({ firstName: me.firstName ?? '', lastName: me.lastName ?? '' });
+      setAvatarPreview(me.avatarUrl ?? null);
       setProfileLoaded(true);
     } catch (e: any) {
       setProfileError(e.message);
@@ -300,9 +322,16 @@ export default function SettingsPage() {
         lastName:  profileForm.lastName  || null,
         role:      profileUser.role,
         isActive:  profileUser.isActive,
+        avatarUrl: avatarPreview ?? null,
+      });
+      setProfileUser({ ...profileUser,
+        firstName: profileForm.firstName || null,
+        lastName:  profileForm.lastName  || null,
+        avatarUrl: avatarPreview ?? null,
       });
       setProfileSaved(true);
       setTimeout(() => setProfileSaved(false), 3000);
+      window.dispatchEvent(new Event('user-updated'));
     } catch (e: any) {
       setProfileError(e.message);
     } finally {
@@ -310,9 +339,11 @@ export default function SettingsPage() {
     }
   }
 
-  function handleAvatarChange(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleAvatarChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    if (file) setAvatarPreview(URL.createObjectURL(file));
+    if (!file) return;
+    const dataUrl = await fileToBase64(file);
+    setAvatarPreview(dataUrl);
   }
 
   // ── OIDC handlers ──────────────────────────────────────────────────────────
@@ -596,7 +627,7 @@ export default function SettingsPage() {
           {TABS.map(({ key, label }) => (
             <button
               key={key}
-              onClick={() => setTab(key)}
+              onClick={() => navigate(key)}
               className={`relative px-4 py-2.5 text-[12px] font-medium transition-colors ${
                 tab === key
                   ? 'text-foreground'
@@ -620,7 +651,7 @@ export default function SettingsPage() {
             <Panel
               title="Authentication"
               subtitle="SSO · OAuth2 · OIDC · LDAP · MFA"
-              actions={<TabLink label="Manage" onClick={() => setTab('oidc')} />}
+              actions={<TabLink label="Manage" onClick={() => navigate('oidc')} />}
             >
               {(
                 [
@@ -628,13 +659,13 @@ export default function SettingsPage() {
                   { l: 'LDAP / Active Directory', s: 'connected', icon: Users,    sub: 'corp.local · sync 5m',                    kind: 'up',  tab: 'oidc'    as Tab },
                   { l: 'MFA · TOTP + WebAuthn',   s: 'enforced',  icon: Lock,     sub: 'all users · 38 enrolled this week',       kind: 'up',  tab: 'profile' as Tab },
                 ] as { l: string; s: string; icon: LucideIcon; sub: string; kind: StatusKind; tab: Tab }[]
-              ).map((x) => <OverviewRow key={x.l} {...x} onDetail={() => setTab(x.tab)} />)}
+              ).map((x) => <OverviewRow key={x.l} {...x} onDetail={() => navigate(x.tab)} />)}
             </Panel>
 
             <Panel
               title="RBAC Roles"
               subtitle="Least-privilege · approval workflows on write actions"
-              actions={<TabLink label="Manage" onClick={() => setTab('users')} />}
+              actions={<TabLink label="Manage" onClick={() => navigate('users')} />}
             >
               <table className="w-full text-xs">
                 <thead className="text-[10px] uppercase tracking-wide text-muted-foreground">
@@ -663,7 +694,7 @@ export default function SettingsPage() {
             <Panel
               title="Distributed Collectors"
               subtitle="4 online · 1,314 devices balanced"
-              actions={<TabLink label="Manage" onClick={() => setTab('collectors')} />}
+              actions={<TabLink label="Manage" onClick={() => navigate('collectors')} />}
             >
               {(
                 [
@@ -672,13 +703,13 @@ export default function SettingsPage() {
                   { l: 'collector-eu-01',      s: 'online',   icon: ServerCog, sub: '402 devices · poll 7.9s · v1.0.0',               kind: 'up' },
                   { l: 'collector-apac-01',    s: 'degraded', icon: ServerCog, sub: '182 devices · poll 14.2s · v0.9.7 — upgrade pending', kind: 'warn' },
                 ] as { l: string; s: string; icon: LucideIcon; sub: string; kind: StatusKind }[]
-              ).map((x) => <OverviewRow key={x.l} {...x} onDetail={() => setTab('collectors')} />)}
+              ).map((x) => <OverviewRow key={x.l} {...x} onDetail={() => navigate('collectors')} />)}
             </Panel>
 
             <Panel
               title="Integrations"
               subtitle="Notifications, webhooks, ITSM"
-              actions={<TabLink label="Manage" onClick={() => setTab('integrations')} />}
+              actions={<TabLink label="Manage" onClick={() => navigate('integrations')} />}
             >
               {(
                 [
@@ -689,7 +720,7 @@ export default function SettingsPage() {
                   { l: 'ServiceNow ITSM',           s: 'active', icon: Webhook, sub: 'auto-create P1/P2 incidents',        kind: 'up' },
                   { l: 'SMTP · alerts@',            s: 'active', icon: Mail,    sub: 'daily digest 07:00 UTC',             kind: 'up' },
                 ] as { l: string; s: string; icon: LucideIcon; sub: string; kind: StatusKind }[]
-              ).map((x) => <OverviewRow key={x.l} {...x} onDetail={() => setTab('integrations')} />)}
+              ).map((x) => <OverviewRow key={x.l} {...x} onDetail={() => navigate('integrations')} />)}
             </Panel>
           </div>
         )}
