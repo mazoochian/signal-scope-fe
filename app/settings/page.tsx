@@ -78,48 +78,6 @@ interface SlackIntegration {
 
 type IntegrationKind = 'email' | 'telegram' | 'slack';
 
-interface EmailRecipient { email: string; label?: string; }
-
-interface AlertEmailSettings {
-  min_severity: string;
-  recipients: EmailRecipient[];
-  user_ids: number[];
-  enabled: boolean;
-}
-
-interface UserAlertPrefs {
-  min_severity: string;
-  enabled: boolean;
-}
-
-interface ReportSubscription {
-  id?: number;
-  label: string;
-  report_type: string;
-  range: string;
-  cron_schedule: string;
-  recipients: EmailRecipient[];
-  user_ids: number[];
-  enabled: boolean;
-  last_sent_at?: string | null;
-}
-
-const SEVERITY_LEVELS = ['Critical', 'Major', 'Minor', 'Warning', 'Info'] as const;
-
-const REPORT_TYPES = [
-  { value: 'device-health',        label: 'Device Health'          },
-  { value: 'interface-utilization', label: 'Interface Utilization' },
-  { value: 'alert-summary',        label: 'Alert Summary'          },
-  { value: 'availability',         label: 'Availability'           },
-] as const;
-
-const SCHEDULE_PRESETS = [
-  { label: 'Hourly',          cron: '0 * * * *'   },
-  { label: 'Daily (8 am)',    cron: '0 8 * * *'   },
-  { label: 'Weekly (Mon 8 am)', cron: '0 8 * * 1' },
-  { label: 'Custom',          cron: null           },
-] as const;
-
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const TABS: { key: Tab; label: string }[] = [
@@ -210,13 +168,6 @@ function defaultTelegramForm(): TelegramIntegration {
 function defaultSlackForm(): SlackIntegration {
   return { enabled: false, botToken: '', defaultChannel: '#noc-alerts' };
 }
-function defaultAlertEmailSettings(): AlertEmailSettings {
-  return { enabled: false, min_severity: 'Critical', recipients: [], user_ids: [] };
-}
-function defaultReportSubForm(): Omit<ReportSubscription, 'id'> {
-  return { label: '', report_type: 'device-health', range: '24h', cron_schedule: '0 8 * * *', recipients: [], user_ids: [], enabled: true };
-}
-
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -284,11 +235,12 @@ function fileToBase64(file: File): Promise<string> {
 export default function SettingsPage() {
   const router = useRouter();
 
-  const [tab, setTab] = useState<Tab>(() => {
-    if (typeof window === 'undefined') return 'overview';
+  const [tab, setTab] = useState<Tab>('overview');
+
+  useEffect(() => {
     const p = new URLSearchParams(window.location.search).get('tab') as Tab | null;
-    return p && TABS.some(t => t.key === p) ? p : 'overview';
-  });
+    if (p && TABS.some(t => t.key === p)) setTab(p);
+  }, []);
 
   function navigate(t: Tab) {
     setTab(t);
@@ -358,26 +310,6 @@ export default function SettingsPage() {
   const [integrationTesting, setIntegrationTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [testEmail,  setTestEmail]  = useState('');
-
-  // ── Alert email notifications state ───────────────────────────────────────
-  const [alertEmailSettings,  setAlertEmailSettings]  = useState<AlertEmailSettings>(defaultAlertEmailSettings());
-  const [alertSettingsSaving, setAlertSettingsSaving] = useState(false);
-  const [alertSettingsSaved,  setAlertSettingsSaved]  = useState(false);
-  const [alertSettingsError,  setAlertSettingsError]  = useState<string | null>(null);
-  const [alertEmailInput, setAlertEmailInput] = useState('');
-  const [myAlertPrefs,     setMyAlertPrefs]     = useState<UserAlertPrefs>({ min_severity: 'Critical', enabled: false });
-  const [myPrefsSaving,    setMyPrefsSaving]    = useState(false);
-  const [myPrefsSaved,     setMyPrefsSaved]     = useState(false);
-
-  // ── Report subscriptions state ────────────────────────────────────────────
-  const [reportSubs,          setReportSubs]          = useState<ReportSubscription[]>([]);
-  const [showReportForm,      setShowReportForm]      = useState(false);
-  const [editReportId,        setEditReportId]        = useState<number | null>(null);
-  const [reportSubForm,       setReportSubForm]       = useState<Omit<ReportSubscription, 'id'>>(defaultReportSubForm());
-  const [reportSubSaving,     setReportSubSaving]     = useState(false);
-  const [reportSubSendingNow, setReportSubSendingNow] = useState<number | null>(null);
-  const [reportSubError,      setReportSubError]      = useState<string | null>(null);
-  const [reportEmailInput,    setReportEmailInput]    = useState('');
 
   // Lazy-load tab data on first switch
   useEffect(() => {
@@ -701,20 +633,14 @@ export default function SettingsPage() {
     setIntegrationsLoading(true);
     setIntegrationsError(null);
     try {
-      const [email, telegram, slack, alertSettings, myPrefs, reportSubscriptions] = await Promise.all([
+      const [email, telegram, slack] = await Promise.all([
         apiCall('/integrations/email',    'GET').catch(() => null),
         apiCall('/integrations/telegram', 'GET').catch(() => null),
         apiCall('/integrations/slack',    'GET').catch(() => null),
-        apiCall('/integrations/email/alert-settings',        'GET').catch(() => null),
-        apiCall('/integrations/email/alert-settings/my-prefs', 'GET').catch(() => null),
-        apiCall('/integrations/email/report-subscriptions',  'GET').catch(() => []),
       ]);
       if (email)    setEmailConfig(email);
       if (telegram) setTelegramConfig(telegram);
       if (slack)    setSlackConfig(slack);
-      if (alertSettings) setAlertEmailSettings(alertSettings);
-      if (myPrefs)       setMyAlertPrefs(myPrefs);
-      if (reportSubscriptions) setReportSubs(reportSubscriptions);
       setIntegrationsLoaded(true);
     } catch (e: any) {
       setIntegrationsError(e.message);
@@ -767,130 +693,6 @@ export default function SettingsPage() {
       setTestResult({ ok: false, message: e.message });
     } finally {
       setIntegrationTesting(false);
-    }
-  }
-
-  // ── Alert email settings handlers ─────────────────────────────────────────
-
-  function addAlertRecipient() {
-    const email = alertEmailInput.trim();
-    if (!email || alertEmailSettings.recipients.some((r) => r.email === email)) return;
-    setAlertEmailSettings({ ...alertEmailSettings, recipients: [...alertEmailSettings.recipients, { email }] });
-    setAlertEmailInput('');
-  }
-
-  function removeAlertRecipient(email: string) {
-    setAlertEmailSettings({ ...alertEmailSettings, recipients: alertEmailSettings.recipients.filter((r) => r.email !== email) });
-  }
-
-  function toggleAlertUser(userId: number) {
-    const ids = alertEmailSettings.user_ids.includes(userId)
-      ? alertEmailSettings.user_ids.filter((id) => id !== userId)
-      : [...alertEmailSettings.user_ids, userId];
-    setAlertEmailSettings({ ...alertEmailSettings, user_ids: ids });
-  }
-
-  async function saveAlertEmailSettings() {
-    setAlertSettingsSaving(true);
-    setAlertSettingsError(null);
-    setAlertSettingsSaved(false);
-    try {
-      const saved = await apiCall('/integrations/email/alert-settings', 'PUT', alertEmailSettings);
-      setAlertEmailSettings(saved);
-      setAlertSettingsSaved(true);
-      setTimeout(() => setAlertSettingsSaved(false), 2000);
-    } catch (e: any) {
-      setAlertSettingsError(e.message);
-    } finally {
-      setAlertSettingsSaving(false);
-    }
-  }
-
-  async function saveMyAlertPrefs() {
-    setMyPrefsSaving(true);
-    setMyPrefsSaved(false);
-    try {
-      const saved = await apiCall('/integrations/email/alert-settings/my-prefs', 'PUT', myAlertPrefs);
-      setMyAlertPrefs(saved);
-      setMyPrefsSaved(true);
-      setTimeout(() => setMyPrefsSaved(false), 2000);
-    } catch {
-      // silent
-    } finally {
-      setMyPrefsSaving(false);
-    }
-  }
-
-  // ── Report subscription handlers ───────────────────────────────────────────
-
-  function openAddReportSub() {
-    setEditReportId(null);
-    setReportSubForm(defaultReportSubForm());
-    setReportEmailInput('');
-    setReportSubError(null);
-    setShowReportForm(true);
-  }
-
-  function openEditReportSub(sub: ReportSubscription) {
-    setEditReportId(sub.id ?? null);
-    setReportSubForm({ label: sub.label, report_type: sub.report_type, range: sub.range, cron_schedule: sub.cron_schedule, recipients: sub.recipients, user_ids: sub.user_ids, enabled: sub.enabled });
-    setReportEmailInput('');
-    setReportSubError(null);
-    setShowReportForm(true);
-  }
-
-  function addReportRecipient() {
-    const email = reportEmailInput.trim();
-    if (!email || reportSubForm.recipients.some((r) => r.email === email)) return;
-    setReportSubForm({ ...reportSubForm, recipients: [...reportSubForm.recipients, { email }] });
-    setReportEmailInput('');
-  }
-
-  function removeReportRecipient(email: string) {
-    setReportSubForm({ ...reportSubForm, recipients: reportSubForm.recipients.filter((r) => r.email !== email) });
-  }
-
-  function toggleReportUser(userId: number) {
-    const ids = reportSubForm.user_ids.includes(userId)
-      ? reportSubForm.user_ids.filter((id) => id !== userId)
-      : [...reportSubForm.user_ids, userId];
-    setReportSubForm({ ...reportSubForm, user_ids: ids });
-  }
-
-  async function saveReportSubscription() {
-    setReportSubSaving(true);
-    setReportSubError(null);
-    try {
-      if (editReportId !== null) {
-        const updated = await apiCall(`/integrations/email/report-subscriptions/${editReportId}`, 'PUT', reportSubForm);
-        setReportSubs(reportSubs.map((s) => s.id === editReportId ? updated : s));
-      } else {
-        const created = await apiCall('/integrations/email/report-subscriptions', 'POST', reportSubForm);
-        setReportSubs([...reportSubs, created]);
-      }
-      setShowReportForm(false);
-    } catch (e: any) {
-      setReportSubError(e.message);
-    } finally {
-      setReportSubSaving(false);
-    }
-  }
-
-  async function deleteReportSubscription(id: number) {
-    try {
-      await apiCall(`/integrations/email/report-subscriptions/${id}`, 'DELETE');
-      setReportSubs(reportSubs.filter((s) => s.id !== id));
-    } catch { /* silent */ }
-  }
-
-  async function sendReportNow(id: number) {
-    setReportSubSendingNow(id);
-    try {
-      await apiCall(`/integrations/email/report-subscriptions/${id}/send-now`, 'POST');
-      const updated = await apiCall('/integrations/email/report-subscriptions', 'GET');
-      if (updated) setReportSubs(updated);
-    } catch { /* silent */ } finally {
-      setReportSubSendingNow(null);
     }
   }
 
@@ -1335,160 +1137,6 @@ export default function SettingsPage() {
                   onConfigure={() => openIntegrationEdit('slack')}
                 />
 
-                {/* ── Alert Email Notifications ────────────────────────────── */}
-                <Panel
-                  title="Alert Email Notifications"
-                  subtitle="Send emails when alerts fire above a severity threshold"
-                  actions={
-                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${alertEmailSettings.enabled ? 'bg-success/15 text-success' : 'bg-muted/40 text-muted-foreground'}`}>
-                      {alertEmailSettings.enabled ? 'active' : 'disabled'}
-                    </span>
-                  }
-                >
-                  <div className="space-y-4">
-                    {alertSettingsError && (
-                      <div className="rounded-md bg-critical/10 px-3 py-2 text-xs text-critical">{alertSettingsError}</div>
-                    )}
-                    <div className="flex flex-wrap items-end gap-3">
-                      <div>
-                        <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Enabled</label>
-                        <label className="flex h-9 cursor-pointer items-center gap-2 text-xs">
-                          <input type="checkbox" checked={alertEmailSettings.enabled}
-                            onChange={(e) => setAlertEmailSettings({ ...alertEmailSettings, enabled: e.target.checked })} />
-                          Send alert emails
-                        </label>
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Minimum Severity</label>
-                        <select className="input" value={alertEmailSettings.min_severity}
-                          onChange={(e) => setAlertEmailSettings({ ...alertEmailSettings, min_severity: e.target.value })}>
-                          {SEVERITY_LEVELS.map((s) => <option key={s} value={s}>{s} and above</option>)}
-                        </select>
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Recipients — Registered Users</label>
-                      <div className="flex flex-wrap gap-1.5">
-                        {users.map((u) => (
-                          <button key={u.id} type="button"
-                            onClick={() => toggleAlertUser(u.id)}
-                            className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] transition-colors ${alertEmailSettings.user_ids.includes(u.id) ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:bg-elevated'}`}>
-                            {u.firstName ? `${u.firstName} ${u.lastName ?? ''}`.trim() : u.email}
-                          </button>
-                        ))}
-                        {users.length === 0 && <p className="text-xs text-muted-foreground italic">No users loaded — switch to Users tab first.</p>}
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Recipients — Additional Addresses</label>
-                      <div className="flex gap-2">
-                        <input type="email" className="input flex-1" placeholder="name@example.com"
-                          value={alertEmailInput} onChange={(e) => setAlertEmailInput(e.target.value)}
-                          onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addAlertRecipient())} />
-                        <button type="button" onClick={addAlertRecipient}
-                          className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-panel px-3 text-xs hover:bg-elevated">
-                          <Plus className="h-3.5 w-3.5" /> Add
-                        </button>
-                      </div>
-                      {alertEmailSettings.recipients.length > 0 && (
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          {alertEmailSettings.recipients.map((r) => (
-                            <span key={r.email} className="inline-flex items-center gap-1 rounded-full border border-border bg-elevated px-2.5 py-0.5 text-[11px]">
-                              {r.email}
-                              <button type="button" onClick={() => removeAlertRecipient(r.email)} className="text-muted-foreground hover:text-foreground">
-                                <X className="h-3 w-3" />
-                              </button>
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="flex items-center justify-end gap-2">
-                      {alertSettingsSaved && <span className="text-xs text-success">Saved</span>}
-                      <button onClick={saveAlertEmailSettings} disabled={alertSettingsSaving}
-                        className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs text-primary-foreground disabled:opacity-50">
-                        {alertSettingsSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} Save
-                      </button>
-                    </div>
-
-                    {/* Per-user opt-in */}
-                    <div className="border-t border-border pt-4">
-                      <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">My Notification Preferences</p>
-                      <div className="flex flex-wrap items-end gap-3">
-                        <label className="flex h-9 cursor-pointer items-center gap-2 text-xs">
-                          <input type="checkbox" checked={myAlertPrefs.enabled}
-                            onChange={(e) => setMyAlertPrefs({ ...myAlertPrefs, enabled: e.target.checked })} />
-                          Notify me via email
-                        </label>
-                        <div>
-                          <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">My Min Severity</label>
-                          <select className="input" value={myAlertPrefs.min_severity}
-                            onChange={(e) => setMyAlertPrefs({ ...myAlertPrefs, min_severity: e.target.value })}>
-                            {SEVERITY_LEVELS.map((s) => <option key={s} value={s}>{s} and above</option>)}
-                          </select>
-                        </div>
-                        <button onClick={saveMyAlertPrefs} disabled={myPrefsSaving}
-                          className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-panel px-3 text-xs hover:bg-elevated disabled:opacity-50">
-                          {myPrefsSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} Save my prefs
-                        </button>
-                        {myPrefsSaved && <span className="text-xs text-success">Saved</span>}
-                      </div>
-                    </div>
-                  </div>
-                </Panel>
-
-                {/* ── Scheduled Report Emails ──────────────────────────────── */}
-                <Panel
-                  title="Scheduled Report Emails"
-                  subtitle="Deliver report summaries to a list of recipients on a schedule"
-                  actions={
-                    <button onClick={openAddReportSub}
-                      className="inline-flex h-7 items-center gap-1.5 rounded-md bg-primary px-2.5 text-[11px] text-primary-foreground hover:opacity-90">
-                      <Plus className="h-3 w-3" /> Add
-                    </button>
-                  }
-                >
-                  {reportSubs.length === 0 ? (
-                    <p className="py-4 text-center text-xs text-muted-foreground italic">No report subscriptions configured.</p>
-                  ) : (
-                    <div className="divide-y divide-border">
-                      {reportSubs.map((sub) => {
-                        const typeLabel = REPORT_TYPES.find((t) => t.value === sub.report_type)?.label ?? sub.report_type;
-                        const preset    = SCHEDULE_PRESETS.find((p) => p.cron === sub.cron_schedule);
-                        const schedLabel = preset ? preset.label : sub.cron_schedule;
-                        const lastSent  = sub.last_sent_at ? new Date(sub.last_sent_at).toLocaleString() : 'Never';
-                        return (
-                          <div key={sub.id} className="flex items-center justify-between gap-3 py-2.5">
-                            <div className="min-w-0">
-                              <p className="truncate text-xs font-medium">{sub.label || typeLabel}</p>
-                              <p className="text-[11px] text-muted-foreground">{typeLabel} · {sub.range} · {schedLabel} · Last: {lastSent}</p>
-                            </div>
-                            <div className="flex shrink-0 items-center gap-1.5">
-                              <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${sub.enabled ? 'bg-success/15 text-success' : 'bg-muted/40 text-muted-foreground'}`}>
-                                {sub.enabled ? 'on' : 'off'}
-                              </span>
-                              <button title="Send now" onClick={() => sendReportNow(sub.id!)} disabled={reportSubSendingNow === sub.id}
-                                className="grid h-6 w-6 place-items-center rounded text-muted-foreground hover:bg-elevated hover:text-foreground disabled:opacity-50">
-                                {reportSubSendingNow === sub.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
-                              </button>
-                              <button title="Edit" onClick={() => openEditReportSub(sub)}
-                                className="grid h-6 w-6 place-items-center rounded text-muted-foreground hover:bg-elevated hover:text-foreground">
-                                <Pencil className="h-3.5 w-3.5" />
-                              </button>
-                              <button title="Delete" onClick={() => deleteReportSubscription(sub.id!)}
-                                className="grid h-6 w-6 place-items-center rounded text-muted-foreground hover:bg-elevated hover:text-critical">
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </Panel>
               </>
             )}
           </div>
@@ -1856,116 +1504,6 @@ export default function SettingsPage() {
                   Add
                 </button>
               </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Report Subscription: Add / Edit modal ────────────────────────────── */}
-      {showReportForm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
-          <div className="w-full max-w-lg rounded-xl border border-border bg-panel p-6 shadow-2xl">
-            <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-sm font-semibold">{editReportId !== null ? 'Edit Report Subscription' : 'Add Report Subscription'}</h2>
-              <button onClick={() => setShowReportForm(false)}><X className="h-4 w-4 text-muted-foreground" /></button>
-            </div>
-            {reportSubError && (
-              <div className="mb-3 rounded-md bg-critical/10 px-3 py-2 text-xs text-critical">{reportSubError}</div>
-            )}
-            <div className="max-h-[70vh] space-y-3 overflow-y-auto pr-1">
-              <Field label="Label (optional)">
-                <input className="input" placeholder="Weekly NOC digest" value={reportSubForm.label}
-                  onChange={(e) => setReportSubForm({ ...reportSubForm, label: e.target.value })} />
-              </Field>
-              <div className="grid grid-cols-2 gap-2">
-                <Field label="Report Type">
-                  <select className="input" value={reportSubForm.report_type}
-                    onChange={(e) => setReportSubForm({ ...reportSubForm, report_type: e.target.value })}>
-                    {REPORT_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-                  </select>
-                </Field>
-                <Field label="Date Range">
-                  <select className="input" value={reportSubForm.range}
-                    onChange={(e) => setReportSubForm({ ...reportSubForm, range: e.target.value })}>
-                    <option value="24h">Last 24 Hours</option>
-                    <option value="7d">Last 7 Days</option>
-                    <option value="30d">Last 30 Days</option>
-                  </select>
-                </Field>
-              </div>
-              <Field label="Schedule">
-                <div className="flex flex-wrap gap-1.5 mb-2">
-                  {SCHEDULE_PRESETS.map((p) => {
-                    const isCustom   = p.cron === null;
-                    const isSelected = isCustom
-                      ? !SCHEDULE_PRESETS.some((q) => q.cron !== null && q.cron === reportSubForm.cron_schedule)
-                      : reportSubForm.cron_schedule === p.cron;
-                    return (
-                      <button key={p.label} type="button"
-                        onClick={() => {
-                          if (!isCustom) {
-                            setReportSubForm({ ...reportSubForm, cron_schedule: p.cron! });
-                          }
-                        }}
-                        className={`rounded-md border px-2.5 py-1 text-[11px] transition-colors ${isSelected ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:bg-elevated'}`}>
-                        {p.label}
-                      </button>
-                    );
-                  })}
-                </div>
-                {!SCHEDULE_PRESETS.some((p) => p.cron !== null && p.cron === reportSubForm.cron_schedule) && (
-                  <input className="input font-mono" placeholder="0 8 * * *" value={reportSubForm.cron_schedule}
-                    onChange={(e) => setReportSubForm({ ...reportSubForm, cron_schedule: e.target.value })} />
-                )}
-              </Field>
-              <Field label="Recipients — Registered Users">
-                <div className="flex flex-wrap gap-1.5">
-                  {users.map((u) => (
-                    <button key={u.id} type="button"
-                      onClick={() => toggleReportUser(u.id)}
-                      className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] transition-colors ${reportSubForm.user_ids.includes(u.id) ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:bg-elevated'}`}>
-                      {u.firstName ? `${u.firstName} ${u.lastName ?? ''}`.trim() : u.email}
-                    </button>
-                  ))}
-                  {users.length === 0 && <p className="text-xs text-muted-foreground italic">No users loaded — switch to Users tab first.</p>}
-                </div>
-              </Field>
-              <Field label="Recipients — Additional Addresses">
-                <div className="flex gap-2">
-                  <input type="email" className="input flex-1" placeholder="name@example.com"
-                    value={reportEmailInput} onChange={(e) => setReportEmailInput(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addReportRecipient())} />
-                  <button type="button" onClick={addReportRecipient}
-                    className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-panel px-3 text-xs hover:bg-elevated">
-                    <Plus className="h-3.5 w-3.5" /> Add
-                  </button>
-                </div>
-                {reportSubForm.recipients.length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {reportSubForm.recipients.map((r) => (
-                      <span key={r.email} className="inline-flex items-center gap-1 rounded-full border border-border bg-elevated px-2.5 py-0.5 text-[11px]">
-                        {r.email}
-                        <button type="button" onClick={() => removeReportRecipient(r.email)} className="text-muted-foreground hover:text-foreground">
-                          <X className="h-3 w-3" />
-                        </button>
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </Field>
-              <label className="flex items-center gap-2 text-xs">
-                <input type="checkbox" checked={reportSubForm.enabled}
-                  onChange={(e) => setReportSubForm({ ...reportSubForm, enabled: e.target.checked })} />
-                Enabled
-              </label>
-            </div>
-            <div className="mt-5 flex justify-end gap-2">
-              <button onClick={() => setShowReportForm(false)} className="h-8 rounded-md border border-border px-3 text-xs hover:bg-elevated">Cancel</button>
-              <button onClick={saveReportSubscription} disabled={reportSubSaving}
-                className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs text-primary-foreground disabled:opacity-50">
-                {reportSubSaving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                <Check className="h-3.5 w-3.5" /> Save
-              </button>
             </div>
           </div>
         </div>

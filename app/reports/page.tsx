@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import {
   FileBarChart2, Calendar, Mail, Download, Eye, Pencil,
   X, Plus, Trash2, Loader2, FileSpreadsheet, Send,
+  Bell, Check, Play, Clock,
 } from 'lucide-react';
 import { TopBar } from '@/components/layout/top-bar';
 import { PageHeader } from '@/components/layout/page-header';
@@ -11,6 +12,34 @@ import { Panel } from '@/components/ui/panel';
 import { API_URL } from '@/lib/api';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+
+interface NotifRecipient { email: string; label?: string; }
+
+interface AlertNotifSettings {
+  enabled: boolean;
+  min_severity: string;
+  recipients: NotifRecipient[];
+  user_ids: number[];
+}
+
+interface UserAlertPrefs {
+  enabled: boolean;
+  min_severity: string;
+}
+
+interface ReportDelivery {
+  id?: number;
+  label: string;
+  report_type: string;
+  range: string;
+  cron_schedule: string;
+  recipients: NotifRecipient[];
+  user_ids: number[];
+  enabled: boolean;
+  last_sent_at?: string | null;
+}
+
+interface UserRow { id: number; email: string; firstName: string | null; lastName: string | null; }
 
 interface ReportDef {
   id: string;
@@ -75,6 +104,40 @@ const RANGES = [
   { label: 'Last 7 days',   value: '7d' },
   { label: 'Last 30 days',  value: '30d' },
 ];
+
+const SEVERITY_LEVELS = ['Critical', 'Major', 'Minor', 'Warning', 'Info'] as const;
+
+const REPORT_TYPES = [
+  { value: 'device-health',         label: 'Device Health'         },
+  { value: 'interface-utilization',  label: 'Interface Utilization' },
+  { value: 'alert-summary',          label: 'Alert Summary'         },
+  { value: 'availability',           label: 'Availability'          },
+] as const;
+
+const SCHEDULE_PRESETS = [
+  { label: 'Hourly',               cron: '0 * * * *'  },
+  { label: 'Daily (8 am)',         cron: '0 8 * * *'  },
+  { label: 'Weekly (Mon 8 am)',    cron: '0 8 * * 1'  },
+  { label: 'Custom',               cron: null          },
+] as const;
+
+async function apiCall(path: string, method: string, body?: unknown) {
+  const res = await fetch(`${API_URL}/api${path}`, {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    credentials: 'include',
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({ message: res.statusText }));
+    throw new Error(e.message ?? `Request failed: ${res.status}`);
+  }
+  return res.json().catch(() => null);
+}
+
+function defaultDeliveryForm(): Omit<ReportDelivery, 'id'> {
+  return { label: '', report_type: 'device-health', range: '24h', cron_schedule: '0 8 * * *', recipients: [], user_ids: [], enabled: true };
+}
 
 const CATEGORY_COLOR: Record<string, string> = {
   Operations: 'bg-primary/15 text-primary',
@@ -210,6 +273,32 @@ export default function ReportsPage() {
   const [editingDef, setEditingDef] = useState<ReportDef | null>(null);
   const [editForm, setEditForm] = useState<ReportConfig>({ frequency: '', range: '', recipients: [] });
 
+  // Alert notifications dialog
+  const [showAlertSettings, setShowAlertSettings] = useState(false);
+  const [alertSettings, setAlertSettings] = useState<AlertNotifSettings>({ enabled: false, min_severity: 'Critical', recipients: [], user_ids: [] });
+  const [alertSettingsSaving, setAlertSettingsSaving] = useState(false);
+  const [alertSettingsError, setAlertSettingsError] = useState<string | null>(null);
+  const [alertSettingsSaved, setAlertSettingsSaved] = useState(false);
+  const [alertRecipInput, setAlertRecipInput] = useState('');
+  const [myPrefs, setMyPrefs] = useState<UserAlertPrefs>({ enabled: false, min_severity: 'Critical' });
+  const [myPrefsSaving, setMyPrefsSaving] = useState(false);
+  const [myPrefsSaved, setMyPrefsSaved] = useState(false);
+
+  // Scheduled deliveries dialog
+  const [showDeliveries, setShowDeliveries] = useState(false);
+  const [deliveries, setDeliveries] = useState<ReportDelivery[]>([]);
+  const [deliveriesLoaded, setDeliveriesLoaded] = useState(false);
+  const [showDeliveryForm, setShowDeliveryForm] = useState(false);
+  const [editDeliveryId, setEditDeliveryId] = useState<number | null>(null);
+  const [deliveryForm, setDeliveryForm] = useState<Omit<ReportDelivery, 'id'>>(defaultDeliveryForm());
+  const [deliverySaving, setDeliverySaving] = useState(false);
+  const [deliveryError, setDeliveryError] = useState<string | null>(null);
+  const [deliveryRecipInput, setDeliveryRecipInput] = useState('');
+  const [deliverySendingNow, setDeliverySendingNow] = useState<number | null>(null);
+
+  // Users for pickers
+  const [users, setUsers] = useState<UserRow[]>([]);
+
   useEffect(() => {
     fetch(`${API_URL}/api/oidc/providers`, { credentials: 'include' })
       .then((r) => r.json())
@@ -217,7 +306,122 @@ export default function ReportsPage() {
         setTelegramAvailable(providers.some((p) => p.provider_type === 'telegram' && p.enabled));
       })
       .catch(() => {});
+    // load notification data upfront
+    Promise.all([
+      apiCall('/integrations/email/alert-settings', 'GET').catch(() => null),
+      apiCall('/integrations/email/alert-settings/my-prefs', 'GET').catch(() => null),
+      apiCall('/integrations/email/report-subscriptions', 'GET').catch(() => []),
+      apiCall('/users', 'GET').catch(() => []),
+    ]).then(([as, mp, ds, us]) => {
+      if (as)  setAlertSettings(as);
+      if (mp)  setMyPrefs(mp);
+      if (ds)  setDeliveries(ds);
+      if (us)  setUsers(Array.isArray(us) ? us : (us?.data ?? []));
+      setDeliveriesLoaded(true);
+    });
   }, []);
+
+  // ── Alert notification handlers ──────────────────────────────────────────
+
+  function addAlertRecip() {
+    const v = alertRecipInput.trim();
+    if (!v || alertSettings.recipients.some((r) => r.email === v)) return;
+    setAlertSettings({ ...alertSettings, recipients: [...alertSettings.recipients, { email: v }] });
+    setAlertRecipInput('');
+  }
+
+  async function saveAlertSettings() {
+    setAlertSettingsSaving(true);
+    setAlertSettingsError(null);
+    setAlertSettingsSaved(false);
+    try {
+      const saved = await apiCall('/integrations/email/alert-settings', 'PUT', alertSettings);
+      setAlertSettings(saved);
+      setAlertSettingsSaved(true);
+      setTimeout(() => setAlertSettingsSaved(false), 2000);
+    } catch (e: unknown) {
+      setAlertSettingsError(e instanceof Error ? e.message : 'Save failed');
+    } finally {
+      setAlertSettingsSaving(false);
+    }
+  }
+
+  async function saveMyPrefs() {
+    setMyPrefsSaving(true);
+    setMyPrefsSaved(false);
+    try {
+      const saved = await apiCall('/integrations/email/alert-settings/my-prefs', 'PUT', myPrefs);
+      setMyPrefs(saved);
+      setMyPrefsSaved(true);
+      setTimeout(() => setMyPrefsSaved(false), 2000);
+    } catch { /* silent */ } finally {
+      setMyPrefsSaving(false);
+    }
+  }
+
+  // ── Scheduled delivery handlers ───────────────────────────────────────────
+
+  function openAddDelivery() {
+    setEditDeliveryId(null);
+    setDeliveryForm(defaultDeliveryForm());
+    setDeliveryRecipInput('');
+    setDeliveryError(null);
+    setShowDeliveryForm(true);
+  }
+
+  function openEditDelivery(d: ReportDelivery) {
+    setEditDeliveryId(d.id ?? null);
+    setDeliveryForm({ label: d.label, report_type: d.report_type, range: d.range, cron_schedule: d.cron_schedule, recipients: d.recipients, user_ids: d.user_ids, enabled: d.enabled });
+    setDeliveryRecipInput('');
+    setDeliveryError(null);
+    setShowDeliveryForm(true);
+  }
+
+  function addDeliveryRecip() {
+    const v = deliveryRecipInput.trim();
+    if (!v || deliveryForm.recipients.some((r) => r.email === v)) return;
+    setDeliveryForm({ ...deliveryForm, recipients: [...deliveryForm.recipients, { email: v }] });
+    setDeliveryRecipInput('');
+  }
+
+  async function saveDelivery() {
+    setDeliverySaving(true);
+    setDeliveryError(null);
+    try {
+      if (editDeliveryId !== null) {
+        const updated = await apiCall(`/integrations/email/report-subscriptions/${editDeliveryId}`, 'PUT', deliveryForm);
+        setDeliveries(deliveries.map((d) => d.id === editDeliveryId ? updated : d));
+      } else {
+        const created = await apiCall('/integrations/email/report-subscriptions', 'POST', deliveryForm);
+        setDeliveries([...deliveries, created]);
+      }
+      setShowDeliveryForm(false);
+    } catch (e: unknown) {
+      setDeliveryError(e instanceof Error ? e.message : 'Save failed');
+    } finally {
+      setDeliverySaving(false);
+    }
+  }
+
+  async function deleteDelivery(id: number) {
+    try {
+      await apiCall(`/integrations/email/report-subscriptions/${id}`, 'DELETE');
+      setDeliveries(deliveries.filter((d) => d.id !== id));
+    } catch { /* silent */ }
+  }
+
+  async function sendDeliveryNow(id: number) {
+    setDeliverySendingNow(id);
+    try {
+      await apiCall(`/integrations/email/report-subscriptions/${id}/send-now`, 'POST');
+      const updated = await apiCall('/integrations/email/report-subscriptions', 'GET');
+      if (updated) setDeliveries(updated);
+    } catch { /* silent */ } finally {
+      setDeliverySendingNow(null);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
 
   async function openView(def: ReportDef) {
     setViewingDef(def);
@@ -284,7 +488,27 @@ export default function ReportsPage() {
   return (
     <>
       <TopBar title="Reports" />
-      <PageHeader title="Reports" subtitle="Scheduled and on-demand reports · PDF · Excel · Email" />
+      <PageHeader title="Reports" subtitle="Scheduled and on-demand reports · PDF · Excel · Delivery" />
+
+      {/* ── Notification toolbar ───────────────────────────────────────────── */}
+      <div className="flex items-center gap-2 border-b border-border bg-panel/60 px-5 py-2">
+        <button onClick={() => setShowAlertSettings(true)}
+          className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-panel px-2.5 text-[11px] hover:bg-elevated">
+          <Bell className="h-3 w-3" />
+          Alert Notifications
+          {alertSettings.enabled && <span className="ml-0.5 h-1.5 w-1.5 rounded-full bg-success" />}
+        </button>
+        <button onClick={() => setShowDeliveries(true)}
+          className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-panel px-2.5 text-[11px] hover:bg-elevated">
+          <Clock className="h-3 w-3" />
+          Scheduled Deliveries
+          {deliveries.length > 0 && (
+            <span className="ml-0.5 rounded-full bg-primary/20 px-1.5 text-[9px] font-semibold text-primary">
+              {deliveries.length}
+            </span>
+          )}
+        </button>
+      </div>
 
       <main className="flex-1 px-5 py-5">
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -508,6 +732,297 @@ export default function ReportsPage() {
             <div className="mt-5 flex justify-end gap-2">
               <button onClick={() => setEditingDef(null)} className="h-8 rounded-md border border-border px-3 text-xs hover:bg-elevated">Cancel</button>
               <button onClick={saveEdit} className="h-8 rounded-md bg-primary px-3 text-xs text-primary-foreground">Save</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Alert Notifications dialog ────────────────────────────────────── */}
+      {showAlertSettings && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+          <div className="w-full max-w-lg rounded-xl border border-border bg-panel p-6 shadow-2xl">
+            <div className="mb-4 flex items-center justify-between">
+              <div>
+                <h2 className="text-sm font-semibold">Alert Notifications</h2>
+                <p className="text-[11px] text-muted-foreground">Notify recipients when alerts fire above a severity threshold</p>
+              </div>
+              <button onClick={() => setShowAlertSettings(false)}><X className="h-4 w-4 text-muted-foreground" /></button>
+            </div>
+
+            {alertSettingsError && (
+              <div className="mb-3 rounded-md bg-critical/10 px-3 py-2 text-xs text-critical">{alertSettingsError}</div>
+            )}
+
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-end gap-3">
+                <div>
+                  <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Enabled</label>
+                  <label className="flex h-9 cursor-pointer items-center gap-2 text-xs">
+                    <input type="checkbox" checked={alertSettings.enabled}
+                      onChange={(e) => setAlertSettings({ ...alertSettings, enabled: e.target.checked })} />
+                    Enable alert notifications
+                  </label>
+                </div>
+                <div>
+                  <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Minimum Severity</label>
+                  <select className="input" value={alertSettings.min_severity}
+                    onChange={(e) => setAlertSettings({ ...alertSettings, min_severity: e.target.value })}>
+                    {SEVERITY_LEVELS.map((s) => <option key={s} value={s}>{s} and above</option>)}
+                  </select>
+                </div>
+              </div>
+
+              {users.length > 0 && (
+                <div>
+                  <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Notify Registered Users</label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {users.map((u) => (
+                      <button key={u.id} type="button"
+                        onClick={() => {
+                          const ids = alertSettings.user_ids.includes(u.id)
+                            ? alertSettings.user_ids.filter((id) => id !== u.id)
+                            : [...alertSettings.user_ids, u.id];
+                          setAlertSettings({ ...alertSettings, user_ids: ids });
+                        }}
+                        className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] transition-colors ${alertSettings.user_ids.includes(u.id) ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:bg-elevated'}`}>
+                        {u.firstName ? `${u.firstName} ${u.lastName ?? ''}`.trim() : u.email}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Additional Recipients</label>
+                <div className="flex gap-2">
+                  <input className="input flex-1" placeholder="name@example.com"
+                    value={alertRecipInput} onChange={(e) => setAlertRecipInput(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addAlertRecip())} />
+                  <button type="button" onClick={addAlertRecip}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-panel px-3 text-xs hover:bg-elevated">
+                    <Plus className="h-3.5 w-3.5" /> Add
+                  </button>
+                </div>
+                {alertSettings.recipients.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {alertSettings.recipients.map((r) => (
+                      <span key={r.email} className="inline-flex items-center gap-1 rounded-full border border-border bg-elevated px-2.5 py-0.5 text-[11px]">
+                        {r.email}
+                        <button type="button" onClick={() => setAlertSettings({ ...alertSettings, recipients: alertSettings.recipients.filter((x) => x.email !== r.email) })}
+                          className="text-muted-foreground hover:text-foreground"><X className="h-3 w-3" /></button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                {alertSettingsSaved && <span className="text-xs text-success">Saved</span>}
+                <button onClick={saveAlertSettings} disabled={alertSettingsSaving}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs text-primary-foreground disabled:opacity-50">
+                  {alertSettingsSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} Save
+                </button>
+              </div>
+
+              <div className="border-t border-border pt-4">
+                <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">My Notification Preferences</p>
+                <div className="flex flex-wrap items-end gap-3">
+                  <label className="flex h-9 cursor-pointer items-center gap-2 text-xs">
+                    <input type="checkbox" checked={myPrefs.enabled}
+                      onChange={(e) => setMyPrefs({ ...myPrefs, enabled: e.target.checked })} />
+                    Notify me for alerts
+                  </label>
+                  <div>
+                    <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">My Min Severity</label>
+                    <select className="input" value={myPrefs.min_severity}
+                      onChange={(e) => setMyPrefs({ ...myPrefs, min_severity: e.target.value })}>
+                      {SEVERITY_LEVELS.map((s) => <option key={s} value={s}>{s} and above</option>)}
+                    </select>
+                  </div>
+                  <button onClick={saveMyPrefs} disabled={myPrefsSaving}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-panel px-3 text-xs hover:bg-elevated disabled:opacity-50">
+                    {myPrefsSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} Save my prefs
+                  </button>
+                  {myPrefsSaved && <span className="text-xs text-success">Saved</span>}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Scheduled Deliveries dialog ───────────────────────────────────── */}
+      {showDeliveries && !showDeliveryForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+          <div className="w-full max-w-lg rounded-xl border border-border bg-panel shadow-2xl">
+            <div className="flex items-center justify-between border-b border-border px-5 py-3">
+              <div>
+                <h2 className="text-sm font-semibold">Scheduled Deliveries</h2>
+                <p className="text-[11px] text-muted-foreground">Automatically deliver report summaries on a cron schedule</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={openAddDelivery}
+                  className="inline-flex h-7 items-center gap-1.5 rounded-md bg-primary px-2.5 text-[11px] text-primary-foreground hover:opacity-90">
+                  <Plus className="h-3 w-3" /> Add
+                </button>
+                <button onClick={() => setShowDeliveries(false)}><X className="h-4 w-4 text-muted-foreground" /></button>
+              </div>
+            </div>
+            <div className="max-h-[60vh] overflow-y-auto p-5">
+              {!deliveriesLoaded ? (
+                <div className="flex justify-center py-8"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+              ) : deliveries.length === 0 ? (
+                <p className="py-8 text-center text-xs text-muted-foreground italic">No scheduled deliveries yet.</p>
+              ) : (
+                <div className="divide-y divide-border">
+                  {deliveries.map((d) => {
+                    const typeLabel  = REPORT_TYPES.find((t) => t.value === d.report_type)?.label ?? d.report_type;
+                    const schedLabel = SCHEDULE_PRESETS.find((p) => p.cron === d.cron_schedule)?.label ?? d.cron_schedule;
+                    return (
+                      <div key={d.id} className="flex items-center justify-between gap-3 py-2.5">
+                        <div className="min-w-0">
+                          <p className="truncate text-xs font-medium">{d.label || typeLabel}</p>
+                          <p className="text-[11px] text-muted-foreground">{typeLabel} · {d.range} · {schedLabel}</p>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${d.enabled ? 'bg-success/15 text-success' : 'bg-muted/40 text-muted-foreground'}`}>
+                            {d.enabled ? 'on' : 'off'}
+                          </span>
+                          <button title="Send now" onClick={() => sendDeliveryNow(d.id!)} disabled={deliverySendingNow === d.id}
+                            className="grid h-6 w-6 place-items-center rounded text-muted-foreground hover:bg-elevated hover:text-foreground disabled:opacity-50">
+                            {deliverySendingNow === d.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+                          </button>
+                          <button title="Edit" onClick={() => openEditDelivery(d)}
+                            className="grid h-6 w-6 place-items-center rounded text-muted-foreground hover:bg-elevated hover:text-foreground">
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                          <button title="Delete" onClick={() => deleteDelivery(d.id!)}
+                            className="grid h-6 w-6 place-items-center rounded text-muted-foreground hover:bg-elevated hover:text-critical">
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Delivery add / edit form dialog ───────────────────────────────── */}
+      {showDeliveryForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+          <div className="w-full max-w-lg rounded-xl border border-border bg-panel p-6 shadow-2xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-sm font-semibold">{editDeliveryId !== null ? 'Edit Delivery' : 'New Scheduled Delivery'}</h2>
+              <button onClick={() => { setShowDeliveryForm(false); }}><X className="h-4 w-4 text-muted-foreground" /></button>
+            </div>
+            {deliveryError && (
+              <div className="mb-3 rounded-md bg-critical/10 px-3 py-2 text-xs text-critical">{deliveryError}</div>
+            )}
+            <div className="max-h-[70vh] space-y-3 overflow-y-auto pr-1">
+              <div>
+                <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Label (optional)</label>
+                <input className="input" placeholder="Weekly NOC digest" value={deliveryForm.label}
+                  onChange={(e) => setDeliveryForm({ ...deliveryForm, label: e.target.value })} />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Report Type</label>
+                  <select className="input" value={deliveryForm.report_type}
+                    onChange={(e) => setDeliveryForm({ ...deliveryForm, report_type: e.target.value })}>
+                    {REPORT_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Date Range</label>
+                  <select className="input" value={deliveryForm.range}
+                    onChange={(e) => setDeliveryForm({ ...deliveryForm, range: e.target.value })}>
+                    <option value="24h">Last 24 Hours</option>
+                    <option value="7d">Last 7 Days</option>
+                    <option value="30d">Last 30 Days</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Schedule</label>
+                <div className="mb-2 flex flex-wrap gap-1.5">
+                  {SCHEDULE_PRESETS.map((p) => {
+                    const isCustom   = p.cron === null;
+                    const isSelected = isCustom
+                      ? !SCHEDULE_PRESETS.some((q) => q.cron !== null && q.cron === deliveryForm.cron_schedule)
+                      : deliveryForm.cron_schedule === p.cron;
+                    return (
+                      <button key={p.label} type="button"
+                        onClick={() => { if (!isCustom) setDeliveryForm({ ...deliveryForm, cron_schedule: p.cron! }); }}
+                        className={`rounded-md border px-2.5 py-1 text-[11px] transition-colors ${isSelected ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:bg-elevated'}`}>
+                        {p.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                {!SCHEDULE_PRESETS.some((p) => p.cron !== null && p.cron === deliveryForm.cron_schedule) && (
+                  <input className="input font-mono" placeholder="0 8 * * *" value={deliveryForm.cron_schedule}
+                    onChange={(e) => setDeliveryForm({ ...deliveryForm, cron_schedule: e.target.value })} />
+                )}
+              </div>
+              {users.length > 0 && (
+                <div>
+                  <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Notify Registered Users</label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {users.map((u) => (
+                      <button key={u.id} type="button"
+                        onClick={() => {
+                          const ids = deliveryForm.user_ids.includes(u.id)
+                            ? deliveryForm.user_ids.filter((id) => id !== u.id)
+                            : [...deliveryForm.user_ids, u.id];
+                          setDeliveryForm({ ...deliveryForm, user_ids: ids });
+                        }}
+                        className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] transition-colors ${deliveryForm.user_ids.includes(u.id) ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:bg-elevated'}`}>
+                        {u.firstName ? `${u.firstName} ${u.lastName ?? ''}`.trim() : u.email}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div>
+                <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Additional Recipients</label>
+                <div className="flex gap-2">
+                  <input className="input flex-1" placeholder="name@example.com"
+                    value={deliveryRecipInput} onChange={(e) => setDeliveryRecipInput(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addDeliveryRecip())} />
+                  <button type="button" onClick={addDeliveryRecip}
+                    className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-panel px-3 text-xs hover:bg-elevated">
+                    <Plus className="h-3.5 w-3.5" /> Add
+                  </button>
+                </div>
+                {deliveryForm.recipients.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {deliveryForm.recipients.map((r) => (
+                      <span key={r.email} className="inline-flex items-center gap-1 rounded-full border border-border bg-elevated px-2.5 py-0.5 text-[11px]">
+                        {r.email}
+                        <button type="button" onClick={() => setDeliveryForm({ ...deliveryForm, recipients: deliveryForm.recipients.filter((x) => x.email !== r.email) })}
+                          className="text-muted-foreground hover:text-foreground"><X className="h-3 w-3" /></button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <label className="flex items-center gap-2 text-xs">
+                <input type="checkbox" checked={deliveryForm.enabled}
+                  onChange={(e) => setDeliveryForm({ ...deliveryForm, enabled: e.target.checked })} />
+                Enabled
+              </label>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button onClick={() => setShowDeliveryForm(false)} className="h-8 rounded-md border border-border px-3 text-xs hover:bg-elevated">Cancel</button>
+              <button onClick={saveDelivery} disabled={deliverySaving}
+                className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs text-primary-foreground disabled:opacity-50">
+                {deliverySaving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                <Check className="h-3.5 w-3.5" /> Save
+              </button>
             </div>
           </div>
         </div>
