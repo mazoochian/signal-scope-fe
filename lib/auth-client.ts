@@ -8,6 +8,7 @@ export interface UserDto {
   firstName: string | null;
   lastName: string | null;
   age: number | null;
+  avatarUrl: string | null;
   role: string;
   isActive: boolean;
 }

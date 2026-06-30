@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   Activity,
@@ -72,10 +72,14 @@ function initials(user: UserDto): string {
 
 export function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
   const [me, setMe] = useState<UserDto | null>(null);
 
   useEffect(() => {
-    getMe().then(setMe).catch(() => setMe(null));
+    const refresh = () => getMe().then(setMe).catch(() => setMe(null));
+    refresh();
+    window.addEventListener('user-updated', refresh);
+    return () => window.removeEventListener('user-updated', refresh);
   }, []);
 
   if (pathname === '/login') return null;
@@ -150,21 +154,34 @@ export function Sidebar() {
 
       <div className="border-t border-sidebar-border p-3">
         <div className="flex items-center gap-2 rounded-md bg-sidebar-accent/60 p-2">
-          <div className="grid h-7 w-7 place-items-center rounded-full bg-primary/20 text-primary text-xs font-semibold">
-            {me ? initials(me) : '?'}
-          </div>
-          <div className="min-w-0 flex-1 leading-tight">
-            <div className="truncate text-xs font-medium">
-              {me ? (me.firstName ? `${me.firstName} ${me.lastName ?? ''}`.trim() : me.email) : '—'}
+          <Link
+            href="/settings?tab=profile"
+            className="flex min-w-0 flex-1 items-center gap-2 hover:opacity-80 transition-opacity"
+          >
+            {me?.avatarUrl ? (
+              <img
+                src={me.avatarUrl}
+                alt="Avatar"
+                className="h-7 w-7 rounded-full object-cover ring-1 ring-border shrink-0"
+              />
+            ) : (
+              <div className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-primary/20 text-primary text-xs font-semibold">
+                {me ? initials(me) : '?'}
+              </div>
+            )}
+            <div className="min-w-0 leading-tight">
+              <div className="truncate text-xs font-medium">
+                {me ? (me.firstName ? `${me.firstName} ${me.lastName ?? ''}`.trim() : me.email) : '—'}
+              </div>
+              <div className="truncate text-[10px] text-muted-foreground capitalize">
+                {me?.role ?? ''}
+              </div>
             </div>
-            <div className="truncate text-[10px] text-muted-foreground capitalize">
-              {me?.role ?? ''}
-            </div>
-          </div>
+          </Link>
           <button
             onClick={() => logout()}
             title="Sign out"
-            className="ml-auto text-muted-foreground hover:text-foreground"
+            className="ml-auto shrink-0 text-muted-foreground hover:text-foreground"
           >
             <LogOut className="h-3.5 w-3.5" />
           </button>

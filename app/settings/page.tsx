@@ -1,10 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Plus, Pencil, Trash2, X, Check, Loader2,
   ShieldPlus, ShieldMinus,
   KeyRound, Users, Lock, ServerCog, Webhook, Mail, Send,
+  Play, AlertCircle, CheckCircle2, Hash, ChevronRight,
+  UsersRound, UserMinus,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { TopBar } from '@/components/layout/top-bar';
@@ -12,14 +15,27 @@ import { PageHeader } from '@/components/layout/page-header';
 import { Panel } from '@/components/ui/panel';
 import { StatusPill } from '@/components/ui/status-pill';
 import { API_URL } from '@/lib/api';
+import { getMe } from '@/lib/auth-client';
 import type { OidcProviderDto, UserDto } from '@/lib/auth-client';
 import type { StatusKind } from '@/types';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type Tab = 'overview' | 'oidc' | 'users' | 'collectors' | 'integrations' | 'discovery';
+type Tab = 'overview' | 'profile' | 'oidc' | 'users' | 'collectors' | 'integrations' | 'discovery';
 
-type ProviderType = 'google' | 'telegram' | 'keycloak' | 'authentik' | 'authelia' | 'custom';
+interface GroupDto {
+  id: number; name: string; description: string | null; role: string; memberCount: number;
+}
+
+interface GroupMemberDto {
+  userId: number; email: string; firstName: string | null; lastName: string | null;
+}
+
+interface GroupForm {
+  name: string; description: string; role: string;
+}
+
+type ProviderType = 'google' | 'telegram' | 'slack' | 'oidc';
 
 interface AccessGrant {
   id: number; resourceType: string; resourceId: string | null; permission: string;
@@ -34,48 +50,72 @@ interface ProviderForm {
 
 interface UserForm {
   email: string; firstName: string; lastName: string;
-  age: string; role: string; password: string; isActive: boolean;
+  role: string; password: string; isActive: boolean;
 }
+
+interface EmailIntegration {
+  enabled: boolean;
+  host: string;
+  port: string;
+  security: 'starttls' | 'ssl' | 'none';
+  username: string;
+  password: string;
+  fromName: string;
+  fromAddress: string;
+}
+
+interface TelegramIntegration {
+  enabled: boolean;
+  botToken: string;
+  defaultChatId: string;
+}
+
+interface SlackIntegration {
+  enabled: boolean;
+  botToken: string;
+  defaultChannel: string;
+}
+
+type IntegrationKind = 'email' | 'telegram' | 'slack';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const TABS: { key: Tab; label: string }[] = [
-  { key: 'overview',     label: 'Overview' },
-  { key: 'oidc',        label: 'OIDC / SSO' },
-  { key: 'users',       label: 'Users' },
-  { key: 'collectors',  label: 'Collectors' },
-  { key: 'integrations',label: 'Integrations' },
-  { key: 'discovery',   label: 'Discovery' },
+  { key: 'overview',     label: 'Overview'     },
+  { key: 'profile',      label: 'Profile'      },
+  { key: 'oidc',         label: 'OIDC / SSO'   },
+  { key: 'users',        label: 'Users & Groups' },
+  { key: 'collectors',   label: 'Collectors'   },
+  { key: 'integrations', label: 'Integrations' },
+  { key: 'discovery',    label: 'Discovery'    },
 ];
 
 const TAB_SUBTITLES: Record<Tab, string> = {
   overview:     'Authentication, RBAC, collectors, integrations, audit',
+  profile:      'Your name, avatar, and security settings',
   oidc:         'Configure identity providers for single sign-on',
-  users:        'Manage user accounts and access control',
+  users:        'Manage user accounts, groups, and access control',
   collectors:   'Distributed polling agents and their health',
   integrations: 'Notifications, webhooks, ITSM connections',
   discovery:    'Network scanning, SNMP credentials, auto-discovery rules',
 };
 
 const PROVIDER_TYPES: { value: ProviderType; label: string }[] = [
-  { value: 'google',    label: 'Google' },
-  { value: 'telegram',  label: 'Telegram' },
-  { value: 'keycloak',  label: 'Keycloak' },
-  { value: 'authentik', label: 'Authentik' },
-  { value: 'authelia',  label: 'Authelia' },
-  { value: 'custom',    label: 'Custom OIDC' },
+  { value: 'oidc',     label: 'Generic OIDC' },
+  { value: 'google',   label: 'Google' },
+  { value: 'slack',    label: 'Slack' },
+  { value: 'telegram', label: 'Telegram' },
 ];
 
 const PROVIDER_HELP: Record<ProviderType, string> = {
-  google:    'Create OAuth 2.0 credentials in Google Cloud Console. Discovery URL is set automatically.',
-  telegram:  'Create a bot via @BotFather. Use the bot token and bot username (without @).',
-  keycloak:  'Use the realm discovery URL: https://your-keycloak/realms/<realm>/.well-known/openid-configuration',
-  authentik: 'Create an OAuth2/OIDC provider in Authentik. Use the discovery URL from the provider details.',
-  authelia:  'Register a client in Authelia config. Use https://your-authelia/.well-known/openid-configuration',
-  custom:    'Enter either a discovery URL or manually specify each endpoint.',
+  oidc:     'Standard OIDC/OAuth2 provider (Authelia, Authentik, Keycloak, or any custom IdP). Enter a discovery URL or specify endpoints manually.',
+  google:   'Create OAuth 2.0 credentials in Google Cloud Console. Discovery URL is set automatically.',
+  slack:    'Create a Slack app with "Sign in with Slack" enabled in the OAuth & Permissions section. Discovery URL is set automatically.',
+  telegram: 'Create a bot via @BotFather. Use the bot token and bot username (without @).',
 };
 
 const GOOGLE_DISCOVERY = 'https://accounts.google.com/.well-known/openid-configuration';
+const SLACK_DISCOVERY  = 'https://slack.com/.well-known/openid-configuration';
 
 const ROLES = ['superadmin', 'admin', 'operator', 'troubleshooter', 'viewer'] as const;
 const RESOURCE_TYPES = ['site', 'device', 'device_role', 'interface', 'all'] as const;
@@ -107,7 +147,7 @@ async function apiCall(path: string, method: string, body?: unknown) {
 
 function defaultProviderForm(): ProviderForm {
   return {
-    name: '', providerType: 'custom', isEnabled: true,
+    name: '', providerType: 'oidc', isEnabled: true,
     clientId: '', clientSecret: '', discoveryUrl: '',
     authorizationEndpoint: '', tokenEndpoint: '', userinfoEndpoint: '',
     scopes: 'openid email profile', botToken: '', botUsername: '',
@@ -116,9 +156,18 @@ function defaultProviderForm(): ProviderForm {
 }
 
 function defaultUserForm(): UserForm {
-  return { email: '', firstName: '', lastName: '', age: '', role: 'viewer', password: '', isActive: true };
+  return { email: '', firstName: '', lastName: '', role: 'viewer', password: '', isActive: true };
 }
 
+function defaultEmailForm(): EmailIntegration {
+  return { enabled: false, host: '', port: '587', security: 'starttls', username: '', password: '', fromName: 'SignalScope NMS', fromAddress: '' };
+}
+function defaultTelegramForm(): TelegramIntegration {
+  return { enabled: false, botToken: '', defaultChatId: '' };
+}
+function defaultSlackForm(): SlackIntegration {
+  return { enabled: false, botToken: '', defaultChannel: '#noc-alerts' };
+}
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -142,9 +191,9 @@ function ComingSoon({ title }: { title: string }) {
   );
 }
 
-interface OverviewRowProps { l: string; s: string; sub: string; icon: LucideIcon; kind: StatusKind; }
+interface OverviewRowProps { l: string; s: string; sub: string; icon: LucideIcon; kind: StatusKind; onDetail?: () => void; }
 
-function OverviewRow({ l, s, sub, icon: Icon, kind }: OverviewRowProps) {
+function OverviewRow({ l, s, sub, icon: Icon, kind, onDetail }: OverviewRowProps) {
   return (
     <div className="mb-2 flex items-center justify-between rounded-md border border-border bg-elevated/40 p-2.5 last:mb-0">
       <div className="flex min-w-0 items-center gap-2.5">
@@ -156,15 +205,47 @@ function OverviewRow({ l, s, sub, icon: Icon, kind }: OverviewRowProps) {
           <div className="truncate text-[10px] text-muted-foreground">{sub}</div>
         </div>
       </div>
-      <StatusPill kind={kind}>{s}</StatusPill>
+      <div className="flex shrink-0 items-center gap-1.5">
+        <StatusPill kind={kind}>{s}</StatusPill>
+        {onDetail && (
+          <button
+            onClick={onDetail}
+            title="Open settings"
+            className="grid h-6 w-6 place-items-center rounded text-muted-foreground transition-colors hover:bg-elevated hover:text-foreground"
+          >
+            <ChevronRight className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
     </div>
   );
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function SettingsPage() {
+  const router = useRouter();
+
   const [tab, setTab] = useState<Tab>('overview');
+
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search).get('tab') as Tab | null;
+    if (p && TABS.some(t => t.key === p)) setTab(p);
+  }, []);
+
+  function navigate(t: Tab) {
+    setTab(t);
+    router.replace(`/settings?tab=${t}`, { scroll: false } as any);
+  }
 
   // ── OIDC state ─────────────────────────────────────────────────────────────
   const [providers, setProviders] = useState<OidcProviderDto[]>([]);
@@ -191,11 +272,106 @@ export default function SettingsPage() {
   const [grants, setGrants] = useState<AccessGrant[]>([]);
   const [newGrant, setNewGrant] = useState({ resourceType: 'site', resourceId: '', permission: 'read' });
 
+  // ── Groups state ───────────────────────────────────────────────────────────
+  const [groups, setGroups] = useState<GroupDto[]>([]);
+  const [groupsLoaded, setGroupsLoaded] = useState(false);
+  const [groupsError, setGroupsError] = useState<string | null>(null);
+  const [groupForm, setGroupForm] = useState<GroupForm>({ name: '', description: '', role: 'viewer' });
+  const [editGroup, setEditGroup] = useState<GroupDto | null>(null);
+  const [showGroupForm, setShowGroupForm] = useState(false);
+  const [groupSaving, setGroupSaving] = useState(false);
+  const [deleteGroupId, setDeleteGroupId] = useState<number | null>(null);
+  const [membersGroupId, setMembersGroupId] = useState<number | null>(null);
+  const [groupMembers, setGroupMembers] = useState<GroupMemberDto[]>([]);
+  const [addMemberUserId, setAddMemberUserId] = useState<string>('');
+
+  // ── Profile state ──────────────────────────────────────────────────────────
+  const [profileUser,    setProfileUser]    = useState<UserDto | null>(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileLoaded,  setProfileLoaded]  = useState(false);
+  const [profileError,   setProfileError]   = useState<string | null>(null);
+  const [profileForm,    setProfileForm]    = useState({ firstName: '', lastName: '' });
+  const [profileSaving,  setProfileSaving]  = useState(false);
+  const [profileSaved,   setProfileSaved]   = useState(false);
+  const [avatarPreview,  setAvatarPreview]  = useState<string | null>(null);
+
+  // ── Integrations state ─────────────────────────────────────────────────────
+  const [integrationsLoaded,  setIntegrationsLoaded]  = useState(false);
+  const [integrationsLoading, setIntegrationsLoading] = useState(false);
+  const [integrationsError,   setIntegrationsError]   = useState<string | null>(null);
+  const [emailConfig,    setEmailConfig]    = useState<EmailIntegration | null>(null);
+  const [telegramConfig, setTelegramConfig] = useState<TelegramIntegration | null>(null);
+  const [slackConfig,    setSlackConfig]    = useState<SlackIntegration | null>(null);
+  const [editingIntegration, setEditingIntegration] = useState<IntegrationKind | null>(null);
+  const [emailForm,    setEmailForm]    = useState<EmailIntegration>(defaultEmailForm());
+  const [telegramForm, setTelegramForm] = useState<TelegramIntegration>(defaultTelegramForm());
+  const [slackForm,    setSlackForm]    = useState<SlackIntegration>(defaultSlackForm());
+  const [integrationSaving,  setIntegrationSaving]  = useState(false);
+  const [integrationTesting, setIntegrationTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [testEmail,  setTestEmail]  = useState('');
+
   // Lazy-load tab data on first switch
   useEffect(() => {
-    if (tab === 'oidc' && !oidcLoaded) loadProviders();
-    if (tab === 'users' && !usersLoaded) loadUsers();
+    if (tab === 'profile'      && !profileLoaded)       loadProfile();
+    if (tab === 'oidc'         && !oidcLoaded)          loadProviders();
+    if (tab === 'users'        && !usersLoaded)         loadUsers();
+    if (tab === 'users'        && !groupsLoaded)        loadGroups();
+    if (tab === 'integrations' && !integrationsLoaded)  loadIntegrations();
   }, [tab]);
+
+  // ── Profile handlers ──────────────────────────────────────────────────────
+
+  async function loadProfile() {
+    setProfileLoading(true);
+    setProfileError(null);
+    try {
+      const me = await getMe();
+      setProfileUser(me);
+      setProfileForm({ firstName: me.firstName ?? '', lastName: me.lastName ?? '' });
+      setAvatarPreview(me.avatarUrl ?? null);
+      setProfileLoaded(true);
+    } catch (e: any) {
+      setProfileError(e.message);
+    } finally {
+      setProfileLoading(false);
+    }
+  }
+
+  async function saveProfile() {
+    if (!profileUser) return;
+    setProfileSaving(true);
+    setProfileError(null);
+    setProfileSaved(false);
+    try {
+      await apiCall(`/users/${profileUser.id}`, 'PUT', {
+        firstName: profileForm.firstName || null,
+        lastName:  profileForm.lastName  || null,
+        role:      profileUser.role,
+        isActive:  profileUser.isActive,
+        avatarUrl: avatarPreview ?? null,
+      });
+      setProfileUser({ ...profileUser,
+        firstName: profileForm.firstName || null,
+        lastName:  profileForm.lastName  || null,
+        avatarUrl: avatarPreview ?? null,
+      });
+      setProfileSaved(true);
+      setTimeout(() => setProfileSaved(false), 3000);
+      window.dispatchEvent(new Event('user-updated'));
+    } catch (e: any) {
+      setProfileError(e.message);
+    } finally {
+      setProfileSaving(false);
+    }
+  }
+
+  async function handleAvatarChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const dataUrl = await fileToBase64(file);
+    setAvatarPreview(dataUrl);
+  }
 
   // ── OIDC handlers ──────────────────────────────────────────────────────────
 
@@ -240,7 +416,8 @@ export default function SettingsPage() {
       const next = { ...f, [k]: v };
       if (k === 'providerType') {
         if (v === 'google') next.discoveryUrl = GOOGLE_DISCOVERY;
-        else if (f.discoveryUrl === GOOGLE_DISCOVERY) next.discoveryUrl = '';
+        else if (v === 'slack') next.discoveryUrl = SLACK_DISCOVERY;
+        else if (f.discoveryUrl === GOOGLE_DISCOVERY || f.discoveryUrl === SLACK_DISCOVERY) next.discoveryUrl = '';
       }
       return next;
     });
@@ -310,7 +487,7 @@ export default function SettingsPage() {
   function openEditUser(u: UserDto) {
     setUserForm({
       email: u.email, firstName: u.firstName ?? '', lastName: u.lastName ?? '',
-      age: u.age?.toString() ?? '', role: u.role, password: '', isActive: u.isActive,
+      role: u.role, password: '', isActive: u.isActive,
     });
     setEditUser(u);
     setUsersError(null);
@@ -323,9 +500,9 @@ export default function SettingsPage() {
     try {
       const body: any = {
         firstName: userForm.firstName || null,
-        lastName: userForm.lastName || null,
-        age: userForm.age ? parseInt(userForm.age, 10) : null,
-        role: userForm.role, isActive: userForm.isActive,
+        lastName:  userForm.lastName  || null,
+        role:      userForm.role,
+        isActive:  userForm.isActive,
       };
       if (userForm.password) body.password = userForm.password;
       if (!editUser) { body.email = userForm.email; await apiCall('/users', 'POST', body); }
@@ -371,10 +548,158 @@ export default function SettingsPage() {
     openGrants(grantsUserId);
   }
 
+  // ── Groups handlers ────────────────────────────────────────────────────────
+
+  async function loadGroups() {
+    setGroupsError(null);
+    try {
+      const list = await apiCall('/groups', 'GET');
+      setGroups(list ?? []);
+      setGroupsLoaded(true);
+    } catch (e: any) {
+      setGroupsError(e.message);
+    }
+  }
+
+  function openAddGroup() {
+    setGroupForm({ name: '', description: '', role: 'viewer' });
+    setEditGroup(null);
+    setGroupsError(null);
+    setShowGroupForm(true);
+  }
+
+  function openEditGroup(g: GroupDto) {
+    setGroupForm({ name: g.name, description: g.description ?? '', role: g.role });
+    setEditGroup(g);
+    setGroupsError(null);
+    setShowGroupForm(true);
+  }
+
+  async function saveGroup() {
+    setGroupSaving(true);
+    setGroupsError(null);
+    try {
+      const body = {
+        name: groupForm.name,
+        description: groupForm.description || null,
+        role: groupForm.role,
+      };
+      if (editGroup) await apiCall(`/groups/${editGroup.id}`, 'PUT', body);
+      else await apiCall('/groups', 'POST', body);
+      setShowGroupForm(false);
+      loadGroups();
+    } catch (e: any) {
+      setGroupsError(e.message);
+    } finally {
+      setGroupSaving(false);
+    }
+  }
+
+  async function deleteGroup(id: number) {
+    try {
+      await apiCall(`/groups/${id}`, 'DELETE');
+      setDeleteGroupId(null);
+      loadGroups();
+    } catch (e: any) {
+      setGroupsError(e.message);
+    }
+  }
+
+  async function openGroupMembers(groupId: number) {
+    const members = await apiCall(`/groups/${groupId}/members`, 'GET');
+    setGroupMembers(members ?? []);
+    setAddMemberUserId('');
+    setMembersGroupId(groupId);
+  }
+
+  async function addGroupMember() {
+    if (!membersGroupId || !addMemberUserId) return;
+    await apiCall(`/groups/${membersGroupId}/members`, 'POST', { userId: parseInt(addMemberUserId, 10) });
+    await openGroupMembers(membersGroupId);
+    setAddMemberUserId('');
+    loadGroups();
+  }
+
+  async function removeGroupMember(userId: number) {
+    if (!membersGroupId) return;
+    await apiCall(`/groups/${membersGroupId}/members/${userId}`, 'DELETE');
+    await openGroupMembers(membersGroupId);
+    loadGroups();
+  }
+
+  // ── Integration handlers ───────────────────────────────────────────────────
+
+  async function loadIntegrations() {
+    setIntegrationsLoading(true);
+    setIntegrationsError(null);
+    try {
+      const [email, telegram, slack] = await Promise.all([
+        apiCall('/integrations/email',    'GET').catch(() => null),
+        apiCall('/integrations/telegram', 'GET').catch(() => null),
+        apiCall('/integrations/slack',    'GET').catch(() => null),
+      ]);
+      if (email)    setEmailConfig(email);
+      if (telegram) setTelegramConfig(telegram);
+      if (slack)    setSlackConfig(slack);
+      setIntegrationsLoaded(true);
+    } catch (e: any) {
+      setIntegrationsError(e.message);
+    } finally {
+      setIntegrationsLoading(false);
+    }
+  }
+
+  function openIntegrationEdit(kind: IntegrationKind) {
+    setTestResult(null);
+    setTestEmail('');
+    setIntegrationsError(null);
+    if (kind === 'email')    setEmailForm(emailConfig       ?? defaultEmailForm());
+    if (kind === 'telegram') setTelegramForm(telegramConfig ?? defaultTelegramForm());
+    if (kind === 'slack')    setSlackForm(slackConfig       ?? defaultSlackForm());
+    setEditingIntegration(kind);
+  }
+
+  async function saveIntegration() {
+    if (!editingIntegration) return;
+    setIntegrationSaving(true);
+    setIntegrationsError(null);
+    try {
+      const body = editingIntegration === 'email'    ? emailForm
+                 : editingIntegration === 'telegram' ? telegramForm
+                 : slackForm;
+      const saved = await apiCall(`/integrations/${editingIntegration}`, 'PUT', body);
+      if (editingIntegration === 'email')    setEmailConfig(saved);
+      if (editingIntegration === 'telegram') setTelegramConfig(saved);
+      if (editingIntegration === 'slack')    setSlackConfig(saved);
+      setEditingIntegration(null);
+    } catch (e: any) {
+      setIntegrationsError(e.message);
+    } finally {
+      setIntegrationSaving(false);
+    }
+  }
+
+  async function testIntegration() {
+    if (!editingIntegration) return;
+    setIntegrationTesting(true);
+    setTestResult(null);
+    try {
+      const body = editingIntegration === 'email'
+        ? { ...emailForm, testRecipient: testEmail || emailForm.username }
+        : editingIntegration === 'telegram' ? telegramForm : slackForm;
+      await apiCall(`/integrations/${editingIntegration}/test`, 'POST', body);
+      setTestResult({ ok: true, message: 'Test message sent successfully.' });
+    } catch (e: any) {
+      setTestResult({ ok: false, message: e.message });
+    } finally {
+      setIntegrationTesting(false);
+    }
+  }
+
   // ── Derived ────────────────────────────────────────────────────────────────
 
-  const isTelegram = providerForm.providerType === 'telegram';
-  const isGoogle   = providerForm.providerType === 'google';
+  const isTelegram      = providerForm.providerType === 'telegram';
+  const isAutoDiscovery = providerForm.providerType === 'google' || providerForm.providerType === 'slack';
 
   const tabActions: Partial<Record<Tab, React.ReactNode>> = {
     oidc: (
@@ -384,10 +709,16 @@ export default function SettingsPage() {
       </button>
     ),
     users: (
-      <button onClick={openAddUser}
-        className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs text-primary-foreground hover:opacity-90">
-        <Plus className="h-3.5 w-3.5" /> Add User
-      </button>
+      <div className="flex gap-2">
+        <button onClick={openAddGroup}
+          className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-panel px-3 text-xs hover:bg-elevated">
+          <Plus className="h-3.5 w-3.5" /> Add Group
+        </button>
+        <button onClick={openAddUser}
+          className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs text-primary-foreground hover:opacity-90">
+          <Plus className="h-3.5 w-3.5" /> Add User
+        </button>
+      </div>
     ),
   };
 
@@ -408,7 +739,7 @@ export default function SettingsPage() {
           {TABS.map(({ key, label }) => (
             <button
               key={key}
-              onClick={() => setTab(key)}
+              onClick={() => navigate(key)}
               className={`relative px-4 py-2.5 text-[12px] font-medium transition-colors ${
                 tab === key
                   ? 'text-foreground'
@@ -429,17 +760,25 @@ export default function SettingsPage() {
         {/* ── Overview ─────────────────────────────────────────────────────── */}
         {tab === 'overview' && (
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <Panel title="Authentication" subtitle="SSO · OAuth2 · OIDC · LDAP · MFA">
+            <Panel
+              title="Authentication"
+              subtitle="SSO · OAuth2 · OIDC · LDAP · MFA"
+              actions={<TabLink label="Manage" onClick={() => navigate('oidc')} />}
+            >
               {(
                 [
-                  { l: 'Azure AD (OIDC)', s: 'connected', icon: KeyRound, sub: 'tenant: signalscope.io · 412 users', kind: 'up' },
-                  { l: 'LDAP / Active Directory', s: 'connected', icon: Users, sub: 'corp.local · sync 5m', kind: 'up' },
-                  { l: 'MFA · TOTP + WebAuthn', s: 'enforced', icon: Lock, sub: 'all users · 38 enrolled this week', kind: 'up' },
-                ] as { l: string; s: string; icon: LucideIcon; sub: string; kind: StatusKind }[]
-              ).map((x) => <OverviewRow key={x.l} {...x} />)}
+                  { l: 'Azure AD (OIDC)',        s: 'connected', icon: KeyRound, sub: 'tenant: signalscope.io · 412 users',     kind: 'up',  tab: 'oidc'    as Tab },
+                  { l: 'LDAP / Active Directory', s: 'connected', icon: Users,    sub: 'corp.local · sync 5m',                    kind: 'up',  tab: 'oidc'    as Tab },
+                  { l: 'MFA · TOTP + WebAuthn',   s: 'enforced',  icon: Lock,     sub: 'all users · 38 enrolled this week',       kind: 'up',  tab: 'profile' as Tab },
+                ] as { l: string; s: string; icon: LucideIcon; sub: string; kind: StatusKind; tab: Tab }[]
+              ).map((x) => <OverviewRow key={x.l} {...x} onDetail={() => navigate(x.tab)} />)}
             </Panel>
 
-            <Panel title="RBAC Roles" subtitle="Least-privilege · approval workflows on write actions">
+            <Panel
+              title="RBAC Roles"
+              subtitle="Least-privilege · approval workflows on write actions"
+              actions={<TabLink label="Manage" onClick={() => navigate('users')} />}
+            >
               <table className="w-full text-xs">
                 <thead className="text-[10px] uppercase tracking-wide text-muted-foreground">
                   <tr className="border-b border-border">
@@ -464,7 +803,11 @@ export default function SettingsPage() {
               </table>
             </Panel>
 
-            <Panel title="Distributed Collectors" subtitle="4 online · 1,314 devices balanced">
+            <Panel
+              title="Distributed Collectors"
+              subtitle="4 online · 1,314 devices balanced"
+              actions={<TabLink label="Manage" onClick={() => navigate('collectors')} />}
+            >
               {(
                 [
                   { l: 'collector-us-east-01', s: 'online',   icon: ServerCog, sub: '412 devices · poll 8.4s · v1.0.0',               kind: 'up' },
@@ -472,10 +815,14 @@ export default function SettingsPage() {
                   { l: 'collector-eu-01',      s: 'online',   icon: ServerCog, sub: '402 devices · poll 7.9s · v1.0.0',               kind: 'up' },
                   { l: 'collector-apac-01',    s: 'degraded', icon: ServerCog, sub: '182 devices · poll 14.2s · v0.9.7 — upgrade pending', kind: 'warn' },
                 ] as { l: string; s: string; icon: LucideIcon; sub: string; kind: StatusKind }[]
-              ).map((x) => <OverviewRow key={x.l} {...x} />)}
+              ).map((x) => <OverviewRow key={x.l} {...x} onDetail={() => navigate('collectors')} />)}
             </Panel>
 
-            <Panel title="Integrations" subtitle="Notifications, webhooks, ITSM">
+            <Panel
+              title="Integrations"
+              subtitle="Notifications, webhooks, ITSM"
+              actions={<TabLink label="Manage" onClick={() => navigate('integrations')} />}
+            >
               {(
                 [
                   { l: 'Slack · #noc-critical',    s: 'active', icon: Webhook, sub: 'sev: critical, major',               kind: 'up' },
@@ -485,8 +832,98 @@ export default function SettingsPage() {
                   { l: 'ServiceNow ITSM',           s: 'active', icon: Webhook, sub: 'auto-create P1/P2 incidents',        kind: 'up' },
                   { l: 'SMTP · alerts@',            s: 'active', icon: Mail,    sub: 'daily digest 07:00 UTC',             kind: 'up' },
                 ] as { l: string; s: string; icon: LucideIcon; sub: string; kind: StatusKind }[]
-              ).map((x) => <OverviewRow key={x.l} {...x} />)}
+              ).map((x) => <OverviewRow key={x.l} {...x} onDetail={() => navigate('integrations')} />)}
             </Panel>
+          </div>
+        )}
+
+        {/* ── Profile ──────────────────────────────────────────────────────── */}
+        {tab === 'profile' && (
+          <div className="mx-auto max-w-lg space-y-4">
+            {profileError && (
+              <div className="rounded-md bg-critical/10 px-3 py-2 text-xs text-critical">{profileError}</div>
+            )}
+            {profileLoading ? (
+              <div className="flex items-center justify-center py-20 text-sm text-muted-foreground">
+                <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Loading…
+              </div>
+            ) : (
+              <Panel title="My Profile" subtitle="Update your display name and avatar">
+                {/* Avatar */}
+                <div className="mb-6 flex items-center gap-4">
+                  <div className="relative">
+                    {avatarPreview ? (
+                      <img src={avatarPreview} alt="Avatar preview" className="h-16 w-16 rounded-full object-cover ring-2 ring-border" />
+                    ) : (
+                      <div className="grid h-16 w-16 place-items-center rounded-full bg-primary/20 text-xl font-semibold text-primary">
+                        {profileUser
+                          ? ((profileForm.firstName?.[0] ?? '') + (profileForm.lastName?.[0] ?? '') || profileUser.email[0]).toUpperCase()
+                          : '?'}
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-border bg-panel px-3 py-1.5 text-xs font-medium hover:bg-elevated">
+                      Upload photo
+                      <input type="file" accept="image/*" className="sr-only" onChange={handleAvatarChange} />
+                    </label>
+                    <p className="mt-1 text-[10px] text-muted-foreground">JPG, PNG or WebP · max 2 MB</p>
+                  </div>
+                </div>
+
+                {/* Read-only identity */}
+                <div className="mb-4 space-y-3">
+                  <div>
+                    <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Username / Email</p>
+                    <p className="rounded-md border border-border bg-elevated/40 px-3 py-2 text-xs text-muted-foreground font-mono">
+                      {profileUser?.email ?? '—'}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Role</p>
+                    <p className="text-xs">
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize ${ROLE_COLOR[profileUser?.role ?? ''] ?? 'bg-muted/40 text-muted-foreground'}`}>
+                        {profileUser?.role ?? '—'}
+                      </span>
+                    </p>
+                  </div>
+                </div>
+
+                {/* Editable name */}
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label="First Name">
+                    <input
+                      value={profileForm.firstName}
+                      onChange={(e) => setProfileForm({ ...profileForm, firstName: e.target.value })}
+                      className="input"
+                      placeholder="Jane"
+                    />
+                  </Field>
+                  <Field label="Last Name">
+                    <input
+                      value={profileForm.lastName}
+                      onChange={(e) => setProfileForm({ ...profileForm, lastName: e.target.value })}
+                      className="input"
+                      placeholder="Smith"
+                    />
+                  </Field>
+                </div>
+
+                <div className="mt-5 flex items-center gap-3">
+                  <button
+                    onClick={saveProfile}
+                    disabled={profileSaving}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-4 text-xs font-medium text-primary-foreground disabled:opacity-50 hover:opacity-90"
+                  >
+                    {profileSaving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                    <Check className="h-3.5 w-3.5" /> Save changes
+                  </button>
+                  {profileSaved && (
+                    <span className="text-xs text-success">Changes saved.</span>
+                  )}
+                </div>
+              </Panel>
+            )}
           </div>
         )}
 
@@ -606,8 +1043,104 @@ export default function SettingsPage() {
           </>
         )}
 
+        {/* ── Groups ───────────────────────────────────────────────────────── */}
+        {tab === 'users' && (
+          <div className="mt-4">
+            {groupsError && !showGroupForm && (
+              <div className="mb-4 rounded-md bg-critical/10 px-3 py-2 text-xs text-critical">{groupsError}</div>
+            )}
+            <Panel title="Groups" subtitle="Named collections of users that share a role">
+              {groups.length === 0 ? (
+                <div className="py-10 text-center text-sm text-muted-foreground">
+                  No groups yet. Create a group to share roles across users.
+                </div>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                    <tr className="border-b border-border">
+                      {['Name', 'Description', 'Role', 'Members', ''].map((h) => (
+                        <th key={h} className="px-3 py-2 text-left font-medium">{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {groups.map((g) => (
+                      <tr key={g.id} className="hover:bg-elevated/40">
+                        <td className="px-3 py-2 font-medium">{g.name}</td>
+                        <td className="px-3 py-2 text-muted-foreground">{g.description ?? '—'}</td>
+                        <td className="px-3 py-2">
+                          <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize ${ROLE_COLOR[g.role] ?? ''}`}>
+                            {g.role}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2">
+                          <button onClick={() => openGroupMembers(g.id)}
+                            className="inline-flex items-center gap-1 rounded border border-border px-2 py-0.5 text-[10px] hover:bg-elevated">
+                            <UsersRound className="h-3 w-3" /> {g.memberCount}
+                          </button>
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            <button onClick={() => openEditGroup(g)} className="rounded p-1 hover:bg-elevated">
+                              <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
+                            </button>
+                            <button onClick={() => setDeleteGroupId(g.id)} className="rounded p-1 hover:bg-elevated">
+                              <Trash2 className="h-3.5 w-3.5 text-critical/70" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </Panel>
+          </div>
+        )}
+
         {tab === 'collectors'  && <ComingSoon title="Collector Management" />}
-        {tab === 'integrations' && <ComingSoon title="Integration Management" />}
+
+        {/* ── Integrations ──────────────────────────────────────────────────── */}
+        {tab === 'integrations' && (
+          <div className="space-y-4">
+            {integrationsError && !editingIntegration && (
+              <div className="rounded-md bg-critical/10 px-3 py-2 text-xs text-critical">{integrationsError}</div>
+            )}
+            {integrationsLoading ? (
+              <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
+                <Loader2 className="mr-2 h-5 w-5 animate-spin" /> Loading…
+              </div>
+            ) : (
+              <>
+                <IntegrationCard
+                  title="Email / SMTP"
+                  subtitle="Outbound mailbox for alerts and scheduled reports"
+                  icon={Mail}
+                  config={emailConfig}
+                  summary={emailConfig ? `${emailConfig.host}:${emailConfig.port} · ${emailConfig.fromAddress || emailConfig.username}` : undefined}
+                  onConfigure={() => openIntegrationEdit('email')}
+                />
+                <IntegrationCard
+                  title="Telegram Bot"
+                  subtitle="Send alerts and reports to Telegram channels or groups"
+                  icon={Send}
+                  config={telegramConfig}
+                  summary={telegramConfig ? `Chat ID: ${telegramConfig.defaultChatId}` : undefined}
+                  onConfigure={() => openIntegrationEdit('telegram')}
+                />
+                <IntegrationCard
+                  title="Slack Bot"
+                  subtitle="Post alerts and reports to Slack channels"
+                  icon={Hash}
+                  config={slackConfig}
+                  summary={slackConfig ? `Channel: ${slackConfig.defaultChannel}` : undefined}
+                  onConfigure={() => openIntegrationEdit('slack')}
+                />
+
+              </>
+            )}
+          </div>
+        )}
 
         {/* ── Discovery ─────────────────────────────────────────────────── */}
         {tab === 'discovery' && (
@@ -677,15 +1210,15 @@ export default function SettingsPage() {
                   <Field label="Client Secret">
                     <input type="password" value={providerForm.clientSecret} onChange={(e) => setProviderField('clientSecret', e.target.value)} className="input" />
                   </Field>
-                  <Field label={`Discovery URL${isGoogle ? ' (auto-set)' : ''}`}>
+                  <Field label={`Discovery URL${isAutoDiscovery ? ' (auto-set)' : ''}`}>
                     <input
                       value={providerForm.discoveryUrl}
                       onChange={(e) => setProviderField('discoveryUrl', e.target.value)}
-                      className="input" readOnly={isGoogle}
-                      placeholder={isGoogle ? GOOGLE_DISCOVERY : 'https://…/.well-known/openid-configuration'}
+                      className="input" readOnly={isAutoDiscovery}
+                      placeholder="https://…/.well-known/openid-configuration"
                     />
                   </Field>
-                  {!isGoogle && (
+                  {!isAutoDiscovery && (
                     <>
                       <details className="text-xs">
                         <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
@@ -761,9 +1294,6 @@ export default function SettingsPage() {
                   <input value={userForm.lastName} onChange={(e) => setUserForm({ ...userForm, lastName: e.target.value })} className="input" />
                 </Field>
               </div>
-              <Field label="Age">
-                <input type="number" value={userForm.age} onChange={(e) => setUserForm({ ...userForm, age: e.target.value })} className="input" min={1} max={120} />
-              </Field>
               <Field label="Role">
                 <select value={userForm.role} onChange={(e) => setUserForm({ ...userForm, role: e.target.value })} className="input">
                   {ROLES.map((r) => <option key={r} value={r} className="capitalize">{r}</option>)}
@@ -860,6 +1390,340 @@ export default function SettingsPage() {
           </div>
         </div>
       )}
+      {/* ── Groups: Add / Edit modal ────────────────────────────────────────── */}
+      {showGroupForm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+          <div className="w-full max-w-md rounded-xl border border-border bg-panel p-6 shadow-2xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-sm font-semibold">{editGroup ? 'Edit Group' : 'Add Group'}</h2>
+              <button onClick={() => setShowGroupForm(false)}><X className="h-4 w-4 text-muted-foreground" /></button>
+            </div>
+            {groupsError && (
+              <div className="mb-3 rounded-md bg-critical/10 px-3 py-2 text-xs text-critical">{groupsError}</div>
+            )}
+            <div className="space-y-3">
+              <Field label="Name">
+                <input value={groupForm.name} onChange={(e) => setGroupForm({ ...groupForm, name: e.target.value })} className="input" placeholder="NOC Level 1" />
+              </Field>
+              <Field label="Description">
+                <input value={groupForm.description} onChange={(e) => setGroupForm({ ...groupForm, description: e.target.value })} className="input" placeholder="Optional description" />
+              </Field>
+              <Field label="Role">
+                <select value={groupForm.role} onChange={(e) => setGroupForm({ ...groupForm, role: e.target.value })} className="input">
+                  {ROLES.map((r) => <option key={r} value={r} className="capitalize">{r}</option>)}
+                </select>
+              </Field>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button onClick={() => setShowGroupForm(false)} className="h-8 rounded-md border border-border px-3 text-xs hover:bg-elevated">Cancel</button>
+              <button onClick={saveGroup} disabled={groupSaving} className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs text-primary-foreground disabled:opacity-50">
+                {groupSaving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                <Check className="h-3.5 w-3.5" /> Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Groups: Delete confirm ───────────────────────────────────────────── */}
+      {deleteGroupId !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+          <div className="w-full max-w-sm rounded-xl border border-border bg-panel p-6 shadow-2xl">
+            <h2 className="mb-2 text-sm font-semibold">Delete Group</h2>
+            <p className="mb-5 text-xs text-muted-foreground">All members will be removed from this group. This cannot be undone.</p>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setDeleteGroupId(null)} className="h-8 rounded-md border border-border px-3 text-xs hover:bg-elevated">Cancel</button>
+              <button onClick={() => deleteGroup(deleteGroupId)} className="h-8 rounded-md bg-critical px-3 text-xs text-white">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Groups: Members modal ────────────────────────────────────────────── */}
+      {membersGroupId !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+          <div className="w-full max-w-lg rounded-xl border border-border bg-panel p-6 shadow-2xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-sm font-semibold">
+                Members — {groups.find((g) => g.id === membersGroupId)?.name}
+              </h2>
+              <button onClick={() => setMembersGroupId(null)}><X className="h-4 w-4 text-muted-foreground" /></button>
+            </div>
+            <div className="mb-4 space-y-1">
+              {groupMembers.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No members yet.</p>
+              ) : (
+                <table className="w-full text-xs">
+                  <thead className="border-b border-border text-[10px] uppercase tracking-wide text-muted-foreground">
+                    <tr>
+                      <th className="pb-1 text-left">Name</th>
+                      <th className="pb-1 text-left">Email</th>
+                      <th />
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {groupMembers.map((m) => (
+                      <tr key={m.userId}>
+                        <td className="py-1.5 pr-2 font-medium">
+                          {m.firstName ? `${m.firstName} ${m.lastName ?? ''}`.trim() : '—'}
+                        </td>
+                        <td className="py-1.5 pr-2 font-mono text-muted-foreground">{m.email}</td>
+                        <td className="py-1.5 text-right">
+                          <button onClick={() => removeGroupMember(m.userId)} title="Remove from group">
+                            <UserMinus className="h-3.5 w-3.5 text-critical/70" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+            <div className="border-t border-border pt-3">
+              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Add Member</p>
+              <div className="flex gap-2">
+                <select
+                  value={addMemberUserId}
+                  onChange={(e) => setAddMemberUserId(e.target.value)}
+                  className="input flex-1"
+                >
+                  <option value="">Select a user…</option>
+                  {users
+                    .filter((u) => !groupMembers.some((m) => m.userId === u.id))
+                    .map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.firstName ? `${u.firstName} ${u.lastName ?? ''}`.trim() : u.email}
+                      </option>
+                    ))}
+                </select>
+                <button
+                  onClick={addGroupMember}
+                  disabled={!addMemberUserId}
+                  className="h-9 rounded-md bg-primary px-3 text-xs text-primary-foreground disabled:opacity-50"
+                >
+                  Add
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Integration: Configure modal ─────────────────────────────────────── */}
+      {editingIntegration && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 px-4">
+          <div className="w-full max-w-lg rounded-xl border border-border bg-panel p-6 shadow-2xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-sm font-semibold">
+                {editingIntegration === 'email' ? 'Email / SMTP'
+                  : editingIntegration === 'telegram' ? 'Telegram Bot'
+                  : 'Slack Bot'}
+              </h2>
+              <button onClick={() => setEditingIntegration(null)}><X className="h-4 w-4 text-muted-foreground" /></button>
+            </div>
+
+            {integrationsError && (
+              <div className="mb-3 rounded-md bg-critical/10 px-3 py-2 text-xs text-critical">{integrationsError}</div>
+            )}
+
+            <div className="max-h-[65vh] space-y-3 overflow-y-auto pr-1">
+
+              {/* Email fields */}
+              {editingIntegration === 'email' && (
+                <>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="col-span-2">
+                      <Field label="SMTP Host">
+                        <input value={emailForm.host} onChange={(e) => setEmailForm({ ...emailForm, host: e.target.value })} className="input" placeholder="smtp.example.com" />
+                      </Field>
+                    </div>
+                    <Field label="Port">
+                      <input type="number" value={emailForm.port} onChange={(e) => setEmailForm({ ...emailForm, port: e.target.value })} className="input" placeholder="587" />
+                    </Field>
+                  </div>
+                  <Field label="Security">
+                    <select value={emailForm.security} onChange={(e) => setEmailForm({ ...emailForm, security: e.target.value as EmailIntegration['security'] })} className="input">
+                      <option value="starttls">STARTTLS (recommended · port 587)</option>
+                      <option value="ssl">SSL / TLS (port 465)</option>
+                      <option value="none">None / plaintext (port 25)</option>
+                    </select>
+                  </Field>
+                  <Field label="Username (mailbox address)">
+                    <input type="email" value={emailForm.username} onChange={(e) => setEmailForm({ ...emailForm, username: e.target.value })} className="input" placeholder="alerts@example.com" />
+                  </Field>
+                  <Field label="Password">
+                    <input type="password" value={emailForm.password} onChange={(e) => setEmailForm({ ...emailForm, password: e.target.value })} className="input" />
+                  </Field>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Field label="From Name">
+                      <input value={emailForm.fromName} onChange={(e) => setEmailForm({ ...emailForm, fromName: e.target.value })} className="input" placeholder="SignalScope NMS" />
+                    </Field>
+                    <Field label="From Address">
+                      <input type="email" value={emailForm.fromAddress} onChange={(e) => setEmailForm({ ...emailForm, fromAddress: e.target.value })} className="input" placeholder="alerts@example.com" />
+                    </Field>
+                  </div>
+                  <label className="flex items-center gap-2 text-xs">
+                    <input type="checkbox" checked={emailForm.enabled} onChange={(e) => setEmailForm({ ...emailForm, enabled: e.target.checked })} />
+                    Enabled
+                  </label>
+                  <div className="border-t border-border pt-3">
+                    <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Send Test Email</p>
+                    <div className="flex gap-2">
+                      <input type="email" placeholder="recipient@example.com" value={testEmail}
+                        onChange={(e) => setTestEmail(e.target.value)} className="input flex-1" />
+                      <button onClick={testIntegration} disabled={integrationTesting}
+                        className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-panel px-3 text-xs hover:bg-elevated disabled:opacity-50">
+                        {integrationTesting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+                        Test
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* Telegram fields */}
+              {editingIntegration === 'telegram' && (
+                <>
+                  <Field label="Bot Token (from @BotFather)">
+                    <input type="password" value={telegramForm.botToken}
+                      onChange={(e) => setTelegramForm({ ...telegramForm, botToken: e.target.value })}
+                      className="input" placeholder="123456789:AABBcc…" />
+                  </Field>
+                  <Field label="Default Chat ID">
+                    <input value={telegramForm.defaultChatId}
+                      onChange={(e) => setTelegramForm({ ...telegramForm, defaultChatId: e.target.value })}
+                      className="input" placeholder="-1001234567890 or @channelname" />
+                  </Field>
+                  <p className="text-[11px] text-muted-foreground">
+                    Use a negative chat ID for groups/supergroups/channels. Add the bot to the channel and grant it posting permissions before testing.
+                  </p>
+                  <label className="flex items-center gap-2 text-xs">
+                    <input type="checkbox" checked={telegramForm.enabled} onChange={(e) => setTelegramForm({ ...telegramForm, enabled: e.target.checked })} />
+                    Enabled
+                  </label>
+                  <div className="border-t border-border pt-3">
+                    <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Send Test Message</p>
+                    <button onClick={testIntegration} disabled={integrationTesting}
+                      className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-panel px-3 text-xs hover:bg-elevated disabled:opacity-50">
+                      {integrationTesting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+                      Send to {telegramForm.defaultChatId || 'default chat'}
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {/* Slack fields */}
+              {editingIntegration === 'slack' && (
+                <>
+                  <Field label="Bot Token (xoxb-…)">
+                    <input type="password" value={slackForm.botToken}
+                      onChange={(e) => setSlackForm({ ...slackForm, botToken: e.target.value })}
+                      className="input" placeholder="xoxb-…" />
+                  </Field>
+                  <Field label="Default Channel">
+                    <input value={slackForm.defaultChannel}
+                      onChange={(e) => setSlackForm({ ...slackForm, defaultChannel: e.target.value })}
+                      className="input" placeholder="#noc-alerts" />
+                  </Field>
+                  <p className="text-[11px] text-muted-foreground">
+                    Create a Slack app, add the <code className="font-mono text-[10px]">chat:write</code> scope, install it to your workspace, then invite the bot to the channel with <code className="font-mono text-[10px]">/invite @botname</code>.
+                  </p>
+                  <label className="flex items-center gap-2 text-xs">
+                    <input type="checkbox" checked={slackForm.enabled} onChange={(e) => setSlackForm({ ...slackForm, enabled: e.target.checked })} />
+                    Enabled
+                  </label>
+                  <div className="border-t border-border pt-3">
+                    <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Send Test Message</p>
+                    <button onClick={testIntegration} disabled={integrationTesting}
+                      className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-panel px-3 text-xs hover:bg-elevated disabled:opacity-50">
+                      {integrationTesting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+                      Send to {slackForm.defaultChannel || 'default channel'}
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {/* Test result banner */}
+              {testResult && (
+                <div className={`flex items-center gap-2 rounded-md px-3 py-2 text-xs ${testResult.ok ? 'bg-success/10 text-success' : 'bg-critical/10 text-critical'}`}>
+                  {testResult.ok
+                    ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                    : <AlertCircle  className="h-3.5 w-3.5 shrink-0" />}
+                  {testResult.message}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <button onClick={() => setEditingIntegration(null)} className="h-8 rounded-md border border-border px-3 text-xs hover:bg-elevated">Cancel</button>
+              <button onClick={saveIntegration} disabled={integrationSaving}
+                className="inline-flex h-8 items-center gap-1.5 rounded-md bg-primary px-3 text-xs text-primary-foreground disabled:opacity-50">
+                {integrationSaving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                <Check className="h-3.5 w-3.5" /> Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
+  );
+}
+
+// ─── TabLink ─────────────────────────────────────────────────────────────────
+
+function TabLink({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="inline-flex items-center gap-0.5 text-[11px] text-primary hover:underline"
+    >
+      {label} <ChevronRight className="h-3 w-3" />
+    </button>
+  );
+}
+
+// ─── IntegrationCard ──────────────────────────────────────────────────────────
+
+interface IntegrationCardProps {
+  title: string;
+  subtitle: string;
+  icon: React.ElementType;
+  config: { enabled: boolean } | null;
+  summary?: string;
+  onConfigure: () => void;
+}
+
+function IntegrationCard({ title, subtitle, icon: Icon, config, summary, onConfigure }: IntegrationCardProps) {
+  return (
+    <Panel
+      title={title}
+      subtitle={subtitle}
+      actions={
+        <div className="flex items-center gap-2">
+          {config ? (
+            <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${config.enabled ? 'bg-success/15 text-success' : 'bg-muted/40 text-muted-foreground'}`}>
+              {config.enabled ? 'active' : 'disabled'}
+            </span>
+          ) : (
+            <span className="rounded-full bg-muted/40 px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">not set</span>
+          )}
+          <button onClick={onConfigure}
+            className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-panel px-2.5 text-[11px] hover:bg-elevated">
+            {config ? <><Pencil className="h-3 w-3" /> Edit</> : 'Configure'}
+          </button>
+        </div>
+      }
+    >
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-elevated">
+          <Icon className="h-4 w-4 text-primary" />
+        </div>
+        {summary ? (
+          <p className="text-xs text-muted-foreground font-mono leading-relaxed">{summary}</p>
+        ) : (
+          <p className="text-xs text-muted-foreground italic">Not configured</p>
+        )}
+      </div>
+    </Panel>
   );
 }

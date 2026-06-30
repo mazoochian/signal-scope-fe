@@ -36,7 +36,7 @@ export function NotificationCenter() {
   useEffect(() => {
     fetch(`${API_URL}/api/notifications`)
       .then((r) => r.json())
-      .then(setNotifications)
+      .then((data) => setNotifications(Array.isArray(data) ? data : []))
       .catch(() => {});
   }, []);
 
